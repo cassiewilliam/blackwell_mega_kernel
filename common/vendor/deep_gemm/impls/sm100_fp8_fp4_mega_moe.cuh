@@ -787,7 +787,9 @@ sm100_fp8_fp4_mega_moe_impl(void* y,
     } else if (warp_idx == kNumDispatchWarps + 2) {
         // Adjust registers
         cutlass::arch::warpgroup_reg_dealloc<kNumNonEpilogueRegisters>();
-        // [prof] MMA: per-block L1/L2 slices emitted inside for_each_block (group 3)
+#ifndef MEGA_PROFILE_BLOCKS
+        MEGA_PROFILE_BEGIN(profiler_buffer, lane_idx == 0, 3u, kProfNumGroups, 3u);  // [prof] MMA (coarse span)
+#endif
 
         // GEMM MMA issue warp (only the leader CTA will run)
         if (is_leader_cta) {
@@ -818,10 +820,14 @@ sm100_fp8_fp4_mega_moe_impl(void* y,
                                          const uint32_t& local_expert_idx,
                                          const uint32_t& num_k_blocks,
                                          const uint32_t& m_block_idx, const uint32_t& n_block_idx) {
-                // [prof] per-block compute slice: group 3 (MMA), event 5=L1 / 6=L2, cursor=2*iter(+1)
+#ifdef MEGA_PROFILE_BLOCKS
+                // [prof] per-block compute slice: group 3, event 5=L1 / 6=L2, cursor=2*iter(+1)
+                // NOTE: opt-in only — these hot-loop probes distort absolute timing (~17x);
+                // use for STRUCTURE (tile counts, L1/L2 ratio), not absolute latency.
                 const uint32_t _prof_iter = current_iter_idx;
                 const uint32_t _prof_ev = (block_phase == sched::BlockPhase::Linear1) ? 5u : 6u;
                 MEGA_PROFILE_BEGIN_AT(profiler_buffer, lane_idx == 0, 3u, kProfNumGroups, 2u * _prof_iter, _prof_ev);
+#endif
 
                 // Dynamic update of UMMA N based on effective M
                 mma::sm100::update_instr_desc_with_umma_n(instr_desc, scheduler.template get_valid_m<true>());
@@ -892,7 +898,9 @@ sm100_fp8_fp4_mega_moe_impl(void* y,
                     // No explicit `tcgen05.fence::before_thread_sync` is needed, as this is implicitly performed by `tcgen05.commit`
                     empty_barrier_arrive(k_block_idx == num_k_blocks - 1);
                 }
+#ifdef MEGA_PROFILE_BLOCKS
                 MEGA_PROFILE_END_AT(profiler_buffer, lane_idx == 0, 3u, kProfNumGroups, 2u * _prof_iter + 1u, _prof_ev);  // [prof] end L1/L2 block
+#endif
             });
 
             // To safely deconstruct barriers, we need another round of waits
@@ -901,6 +909,9 @@ sm100_fp8_fp4_mega_moe_impl(void* y,
                 tmem_empty_barriers[(current_iter_idx - 1) % kNumEpilogueStages]->wait(accum_phase_idx);
             }
         }
+#ifndef MEGA_PROFILE_BLOCKS
+        MEGA_PROFILE_END(profiler_buffer, lane_idx == 0, 3u, kProfNumGroups, 3u);  // [prof] end MMA (coarse span)
+#endif
     } else if (warp_idx == kNumDispatchWarps + 3) {
         // Adjust registers
         cutlass::arch::warpgroup_reg_dealloc<kNumNonEpilogueRegisters>();
