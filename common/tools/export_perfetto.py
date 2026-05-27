@@ -50,17 +50,32 @@ def decode(raw: bytes):
 
 
 def to_chrome_trace(events, event_names):
-    """Perfetto 可直接读 Chrome trace JSON（ph=B/E/i）。track = SM，tid = block。"""
+    """Chrome/Perfetto trace JSON. Track (pid) = SM, tid = block/CTA.
+
+    Adds process_name/thread_name metadata so Perfetto shows "SM N" / "CTA N"
+    instead of "Process N" / "Thread N".
+    """
     out = []
+    sms, threads = set(), set()
     for e in events:
         name = event_names[e["eidx"]] if e["eidx"] < len(event_names) else f"ev{e['eidx']}"
         ph = {TYPE_BEGIN: "B", TYPE_END: "E", TYPE_INSTANT: "i"}[e["type"]]
-        rec = dict(name=name, ph=ph, ts=e["ts"] / 1000.0,  # ns → us
+        rec = dict(name=name, ph=ph, ts=e["ts"] / 1000.0,  # ns -> us
                    pid=e["sm"], tid=e["block"])
         if ph == "i":
             rec["s"] = "t"
         out.append(rec)
-    # 给每个 SM/ block 命名
+        sms.add(e["sm"])
+        threads.add((e["sm"], e["block"]))
+    # name tracks: process = SM, thread = CTA
+    for sm in sorted(sms):
+        out.append(dict(name="process_name", ph="M", pid=sm,
+                        args={"name": f"SM {sm:03d}"}))
+        out.append(dict(name="process_sort_index", ph="M", pid=sm,
+                        args={"sort_index": sm}))
+    for sm, blk in sorted(threads):
+        out.append(dict(name="thread_name", ph="M", pid=sm, tid=blk,
+                        args={"name": f"CTA {blk}"}))
     return {"traceEvents": out, "displayTimeUnit": "ns"}
 
 
