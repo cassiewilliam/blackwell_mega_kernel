@@ -1,57 +1,63 @@
 # blackwell_mega_kernel
 
-SM100 (Blackwell) **mega kernel 集合** —— 把多个"单 kernel 融合整条管线"的大算子，
-重构成干净、可独立编译、单元可测、并自带 **per-SM Perfetto 时间线可视化** 的工程。
+A collection of SM100 (Blackwell) **mega kernels** — large operators that fuse an
+entire pipeline into a single kernel — refactored into a clean project that builds
+standalone, is unit-testable, and ships with **per-SM Perfetto timeline visualization**.
 
-每个 mega kernel 在 [`kernels/`](kernels/) 下各占一个子目录，共享 [`common/`](common/)
-里的基础设施（profiler 探针、Perfetto 导出、TVM FFI 加载）。
+Each mega kernel lives in its own directory under [`kernels/`](kernels/) and shares the
+infrastructure in [`common/`](common/) (profiler probes, Perfetto export, TVM FFI loader).
 
-## 当前内容
+## Contents
 
-| Kernel | 说明 | 状态 |
+| Kernel | Description | Status |
 |---|---|---|
-| [`kernels/mega_moe`](kernels/mega_moe) | FP8×FP4 MoE 五段融合（Dispatch→L1→SwiGLU→L2→Combine），重构自 DeepGEMM `sm100_fp8_fp4_mega_moe.cuh` | 骨架 + CPU 参考 + FFI/profiler 绑定 ✅；kernel 实现进行中 |
+| [`kernels/mega_moe`](kernels/mega_moe) | FP8×FP4 5-phase fused MoE (Dispatch→L1→SwiGLU→L2→Combine), refactored from DeepGEMM `sm100_fp8_fp4_mega_moe.cuh` | Scaffold + CPU reference + FFI/profiler bindings ✅; kernel port in progress |
 
-> 后续可能加入其它 mega kernel（如 mega_ffn / mega_attention），结构已为此预留。
+> More mega kernels (e.g. mega_ffn / mega_attention) may follow; the structure is built to accommodate them.
 
-## 仓库布局
+## Repository layout
 
 ```
 blackwell_mega_kernel/
-├── CMakeLists.txt                  顶层：全局选项 + add_subdirectory(kernels/*)
-├── common/                         跨 kernel 共享
+├── CMakeLists.txt                  Top-level: global options + add_subdirectory(kernels/*)
+├── common/                         Shared across kernels
 │   ├── include/mega/
-│   │   └── profiler.cuh            per-SM Perfetto 探针（device 宏，零开销可关）
+│   │   └── profiler.cuh            per-SM Perfetto probe (device macros, zero-cost when off)
 │   ├── python/mega_common/
-│   │   └── __init__.py             tvm_ffi 模块加载 + profiler buffer 分配
-│   └── tools/
-│       └── export_perfetto.py      profiler buffer → Perfetto trace JSON
+│   │   └── __init__.py             tvm_ffi module loading + profiler buffer helpers
+│   ├── tools/
+│   │   └── export_perfetto.py      profiler buffer → Perfetto trace JSON
+│   └── vendor/deep_gemm/           Vendored DeepGEMM device headers (MIT, verbatim)
 └── kernels/
-    └── mega_moe/                   见 kernels/mega_moe/README.md
-        ├── CMakeLists.txt          可被顶层引入，也可 standalone 构建
-        ├── include/mega_moe/       公开 API + shapes + workspace + events
-        ├── bindings/               TVM FFI C++ 绑定
-        ├── python/mega_moe/        kernel 专属 config + 调用封装
-        ├── tests/                  五段 CPU 黄金参考 + 单元测试
-        ├── src/                    CUDA kernel（进行中）
-        └── bench/                  性能基线（进行中）
+    └── mega_moe/                   See kernels/mega_moe/README.md
+        ├── CMakeLists.txt          Usable from the top level or standalone
+        ├── include/mega_moe/       Public API + shapes + workspace + events
+        ├── bindings/               TVM FFI C++ binding
+        ├── python/mega_moe/        Kernel-specific config + call wrappers
+        ├── tests/                  5-phase CPU golden reference + unit tests
+        ├── src/                    CUDA kernel (in progress)
+        └── bench/                  Performance baselines (in progress)
 ```
 
-## 三个设计支柱
+## Three design pillars
 
-1. **干净的 C++/CUDA 内核**：单文件大内核拆成可读的 `phase_*` 函数 + warp-role 表。
-2. **TVM FFI 绑定**：经 `tvm::ffi` C++ 接口暴露稳定 ABI，Python（torch→DLPack 零拷贝）
-   可调用——保留 Python/JIT 工作流，不依赖 pybind11 / torch C++ 扩展。
-3. **per-SM Perfetto tracing**（仿 [FlashInfer profiler](https://github.com/flashinfer-ai/flashinfer/blob/main/include/flashinfer/profiler.cuh)）：
-   `-DMEGA_ENABLE_PROFILER` 开关，关闭零开销；按 SM 导出时间线看各段重叠。
+1. **Clean C++/CUDA kernel**: the single monolithic kernel is split into readable
+   `phase_*` functions plus a warp-role table.
+2. **TVM FFI binding**: exposed through the `tvm::ffi` C++ interface as a stable ABI,
+   callable from Python (torch→DLPack, zero-copy). Keeps the Python/JIT workflow without
+   depending on pybind11 or the torch C++ extension.
+3. **per-SM Perfetto tracing** (modeled on the
+   [FlashInfer profiler](https://github.com/flashinfer-ai/flashinfer/blob/main/include/flashinfer/profiler.cuh)):
+   gated by `-DMEGA_ENABLE_PROFILER`, zero-cost when off; exports a per-SM timeline so you
+   can see how the phases overlap.
 
-## 构建
+## Build
 
 ```bash
-# 仅 host 参考 + 单元测试（无需 GPU/CUTLASS/tvm-ffi）
+# Host reference + unit tests only (no GPU/CUTLASS/tvm-ffi needed)
 cmake -B build && cmake --build build -j && ctest --test-dir build
 
-# 含 CUDA kernel + tvm-ffi 绑定 + profiler（需 B200 + CUTLASS + apache-tvm-ffi）
+# With the CUDA kernel + tvm-ffi binding + profiler (needs B200 + CUTLASS + apache-tvm-ffi)
 cmake -B build \
   -DMEGA_BUILD_KERNEL=ON -DMEGA_BUILD_FFI=ON -DMEGA_ENABLE_PROFILER=ON \
   -DMEGA_CUTLASS_DIR=/path/to/cutlass/include \
