@@ -40,6 +40,8 @@ g++ -std=c++20 -O3 -fPIC -shared \
   -I"$TORCH/include/torch/csrc/api/include" \
   -I"$PYINC" \
   -I"$CUDA/include" \
+  -I"$CUDA/targets/x86_64-linux/include" \
+  -I"$CUDA/targets/x86_64-linux/include/cccl" \
   -x c++ "$REPO/kernels/mega_moe/bindings/mega_moe_ffi.cu" \
   -L"$TORCH/lib" -ltorch -ltorch_cpu -ltorch_cuda -lc10 -lc10_cuda \
   -L"$NVLIB" -lnvrtc -lcublasLt \
