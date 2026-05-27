@@ -25,6 +25,24 @@ echo "cuda=$CUDA cutlass=$CUTLASS nvlib=$NVLIB"
 OUT="$REPO/build_ffi"
 mkdir -p "$OUT"
 
+# --- merged HOST csrc tree (for the bridge g++) -------------------------------
+# csrc uses RELATIVE includes (../jit/, ../../utils/, sm100.hpp), so the 3 editable
+# MegaMoE host files (mega.hpp, launcher, heuristics/mega_moe.hpp) in src/csrc must
+# sit in a tree alongside the shared csrc siblings. Build a symlink farm: MegaMoE
+# files -> editable src/csrc; everything else -> common/vendor/csrc.
+HOSTROOT="$OUT/host_root"
+rm -rf "$HOSTROOT"; mkdir -p "$HOSTROOT/csrc/"{apis,jit_kernels/impls,jit_kernels/heuristics}
+VC="$REPO/common/vendor/csrc"; SC="$REPO/kernels/mega_moe/src/csrc"
+ln -sfn "$VC/jit"   "$HOSTROOT/csrc/jit"
+ln -sfn "$VC/utils" "$HOSTROOT/csrc/utils"
+ln -sfn "$SC/apis/mega.hpp"                                  "$HOSTROOT/csrc/apis/mega.hpp"
+ln -sfn "$SC/jit_kernels/impls/sm100_fp8_fp4_mega_moe.hpp"   "$HOSTROOT/csrc/jit_kernels/impls/sm100_fp8_fp4_mega_moe.hpp"
+ln -sfn "$VC/jit_kernels/impls/runtime_utils.hpp"            "$HOSTROOT/csrc/jit_kernels/impls/runtime_utils.hpp"
+ln -sfn "$SC/jit_kernels/heuristics/mega_moe.hpp"            "$HOSTROOT/csrc/jit_kernels/heuristics/mega_moe.hpp"
+for h in sm100 sm90 common config runtime utils; do
+  ln -sfn "$VC/jit_kernels/heuristics/$h.hpp" "$HOSTROOT/csrc/jit_kernels/heuristics/$h.hpp"
+done
+
 # Compile with g++ (host), NOT nvcc: the bridge is pure host code (the CUDA kernel
 # is JIT-compiled by nvcc at runtime). Under nvcc, DG_IN_CUDA_COMPILATION would be
 # defined and DeepGEMM's DG_UNIFIED_ASSERT would emit device `trap;` into the host
@@ -33,6 +51,7 @@ mkdir -p "$OUT"
 g++ -std=c++20 -O3 -fPIC -shared \
   -D_GLIBCXX_USE_CXX11_ABI=$ABI -DDG_TENSORMAP_COMPATIBLE=1 \
   -I"$REPO/kernels/mega_moe/src" \
+  -I"$HOSTROOT" \
   -I"$REPO/common/vendor" \
   -I"$REPO/common/include" \
   -I"$CUTLASS" \
