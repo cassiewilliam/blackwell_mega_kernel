@@ -14,6 +14,9 @@ CUDA=${CUDA_HOME:-/usr/local/cuda}
 CUTLASS=${MEGA_CUTLASS_DIR:-/home/workcode/lmdeploy-trtllm-fused-moe/build/_deps/repo-cutlass-src/include}
 NVLIB=$(python3 -c "import os,glob;print(os.path.dirname(glob.glob('/opt/py3/**/nvidia/cu13/lib/libnvrtc.so*',recursive=True)[0]))")
 TVM_FFI_LIB=$(python3 -c "import os,glob;c=glob.glob('$TVM_FFI/**/libtvm_ffi*.so*',recursive=True);print(os.path.dirname(c[0]) if c else '')")
+# Python.h needed because vendored csrc/apis/mega.hpp includes <pybind11/functional.h>
+# (only for register_apis, which we don't call — but it still compiles).
+PYINC=$(python3 -c "import sysconfig;print(sysconfig.get_path('include'))")
 
 echo "torch=$TORCH abi=$ABI"
 echo "tvm_ffi=$TVM_FFI lib=$TVM_FFI_LIB"
@@ -31,6 +34,7 @@ nvcc -std=c++20 -O3 -arch=sm_100a --expt-relaxed-constexpr \
   -I"$TVM_FFI/include" \
   -I"$TORCH/include" \
   -I"$TORCH/include/torch/csrc/api/include" \
+  -I"$PYINC" \
   -I"$CUDA/include" \
   "$REPO/kernels/mega_moe/bindings/mega_moe_ffi.cu" \
   -L"$TORCH/lib" -ltorch -ltorch_cpu -ltorch_cuda -lc10 -lc10_cuda \
