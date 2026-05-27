@@ -129,7 +129,7 @@ void MegaMoE(TensorView y,
 
 // Token alignment helper (no tensors) — 2.5.0 renamed this from get_block_m_for_mega_moe.
 int64_t TokenAlignment() {
-    return deep_gemm::get_token_alignment_for_mega_moe();
+    return deep_gemm::mega::get_token_alignment_for_mega_moe();
 }
 
 }  // namespace
