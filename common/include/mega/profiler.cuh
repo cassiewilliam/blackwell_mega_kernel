@@ -61,61 +61,42 @@ __device__ __forceinline__ uint32_t encode_tag(uint32_t sm, uint32_t block,
            (event_idx << kIdxShift) | (type << kTypeShift);
 }
 
-// per-(block,group) 写游标。closure 在 kernel 里按 group(=warp role) 构造一次。
-struct Closure {
-    Entry*   buffer;
-    uint32_t base_tag;     // 已含 sm_id、block_id
-    uint32_t slot;         // 1 + block*num_groups + group
-    uint32_t stride;       // num_blocks * num_groups
-    uint32_t cursor;       // 当前写到第几条
-    bool     active;       // 只有指定线程写（通常 warp leader）
+// Stateless write: re-derives blockIdx/gridDim/smid and takes the buffer pointer
+// at EACH call. Holds NO state across calls — critical because warp-specialized
+// kernels run `reg_reconfig`/setmaxnreg, which would corrupt any cached register
+// state (buffer ptr / slot / stride) carried across the kernel body.
+//   num_groups is fixed to 1 here (single per-CTA track). Layout matches
+//   export_perfetto.py: slot = 1 + block + cursor * num_blocks.
+__device__ __forceinline__ void write_event(void* buf, uint32_t cursor,
+                                             uint32_t event_idx, uint32_t type) {
+    if (buf == nullptr || threadIdx.x != 0) return;
+    const uint32_t blk = blockIdx.x, nbk = gridDim.x;
+    Entry e;
+    e.tag = encode_tag(read_smid(), blk, event_idx, type);
+    e.delta_time = read_globaltimer_lo();
+    reinterpret_cast<Entry*>(buf)[1 + blk + (size_t)cursor * nbk] = e;
+}
 
-    __device__ __forceinline__ void emit(uint32_t event_idx, uint32_t type) {
-        if (!active) return;
-        Entry e;
-        e.tag = base_tag | (event_idx << kIdxShift) | (type << kTypeShift);
-        e.delta_time = read_globaltimer_lo();
-        buffer[slot + (size_t)cursor * stride] = e;
-        ++cursor;
-    }
-};
+__device__ __forceinline__ void write_header(void* buf) {
+    if (buf == nullptr || blockIdx.x != 0 || threadIdx.x != 0) return;
+    Entry h; h.num_blocks = gridDim.x; h.num_groups = 1;
+    reinterpret_cast<Entry*>(buf)[0] = h;
+}
 
 }  // namespace mega::prof
 
-// kernel 入口处调用一次：写 header（仅 block0/thread0）并构造本 group 的 closure。
-//   buf        : Entry* 全局 buffer
-//   group_idx  : warp-role 编号 [0, num_groups)
-//   num_groups : 总 group 数
-//   write_pred : 只有该线程为 true 时本 group 才写（通常各 role 的 leader lane）
-// NOTE: macro params are prefixed (p_*) to avoid colliding with Entry members
-// like `num_groups` (otherwise the preprocessor rewrites `_h.num_groups`).
-#define MEGA_PROFILER_INIT(p_buf, p_gi, p_ng, p_wp)                                     \
-    ::mega::prof::Closure _mm_prof{};                                                   \
-    do {                                                                                \
-        const uint32_t _blk = blockIdx.x;                                               \
-        const uint32_t _nbk = gridDim.x;                                                \
-        if (_blk == 0 && threadIdx.x == 0) {                                            \
-            ::mega::prof::Entry _h; _h.num_blocks = _nbk; _h.num_groups = (p_ng);       \
-            (p_buf)[0] = _h;                                                            \
-        }                                                                               \
-        _mm_prof.buffer   = (p_buf);                                                    \
-        _mm_prof.base_tag = ::mega::prof::encode_tag(                                   \
-                                ::mega::prof::read_smid(), _blk, 0, 0);                 \
-        _mm_prof.slot     = 1 + _blk * (p_ng) + (p_gi);                                 \
-        _mm_prof.stride   = _nbk * (p_ng);                                              \
-        _mm_prof.cursor   = 0;                                                          \
-        _mm_prof.active   = (p_wp);                                                     \
-    } while (0)
-
-#define MEGA_PROFILE_BEGIN(ev)   _mm_prof.emit((uint32_t)(ev), ::mega::prof::kBegin)
-#define MEGA_PROFILE_END(ev)     _mm_prof.emit((uint32_t)(ev), ::mega::prof::kEnd)
-#define MEGA_PROFILE_INSTANT(ev) _mm_prof.emit((uint32_t)(ev), ::mega::prof::kInstant)
+// All macros take the buffer pointer directly (no cached closure). `cursor` is a
+// compile-time slot index per call site (0 = begin, 1 = end, ...).
+#define MEGA_PROFILER_INIT(p_buf)             ::mega::prof::write_header(p_buf)
+#define MEGA_PROFILE_BEGIN(p_buf, cursor, ev) ::mega::prof::write_event((p_buf), (cursor), (uint32_t)(ev), ::mega::prof::kBegin)
+#define MEGA_PROFILE_END(p_buf, cursor, ev)   ::mega::prof::write_event((p_buf), (cursor), (uint32_t)(ev), ::mega::prof::kEnd)
+#define MEGA_PROFILE_INSTANT(p_buf, cursor, ev) ::mega::prof::write_event((p_buf), (cursor), (uint32_t)(ev), ::mega::prof::kInstant)
 
 #else  // ---------------- 关闭：全部展开为空，零开销 ----------------
 
-#define MEGA_PROFILER_INIT(p_buf, p_gi, p_ng, p_wp) ((void)0)
-#define MEGA_PROFILE_BEGIN(ev)   ((void)0)
-#define MEGA_PROFILE_END(ev)     ((void)0)
-#define MEGA_PROFILE_INSTANT(ev) ((void)0)
+#define MEGA_PROFILER_INIT(p_buf)               ((void)0)
+#define MEGA_PROFILE_BEGIN(p_buf, cursor, ev)   ((void)0)
+#define MEGA_PROFILE_END(p_buf, cursor, ev)     ((void)0)
+#define MEGA_PROFILE_INSTANT(p_buf, cursor, ev) ((void)0)
 
 #endif  // MEGA_ENABLE_PROFILER

@@ -81,11 +81,9 @@ sm100_fp8_fp4_mega_moe_impl(void* y,
     const uint32_t warp_idx = cutlass::canonical_warp_idx_sync();
     const uint32_t lane_idx = ptx::get_lane_idx();
 
-#ifdef MEGA_ENABLE_PROFILER
-    // [mega_moe profiler] DIAGNOSTIC: sentinel write to test pointer validity
-    if (profiler_buffer != nullptr && blockIdx.x == 0 && thread_idx == 0)
-        reinterpret_cast<uint64_t*>(profiler_buffer)[0] = 0xDEADBEEFULL;
-#endif
+    // [mega_moe profiler] per-SM whole-kernel span (stateless probes; cursor 0=begin).
+    MEGA_PROFILER_INIT(profiler_buffer);
+    MEGA_PROFILE_BEGIN(profiler_buffer, 0u, 0u /* whole-kernel span */);
 
     // Prefetch TMA descriptors at the very beginning
     if (warp_idx == 0) {
@@ -1381,6 +1379,8 @@ sm100_fp8_fp4_mega_moe_impl(void* y,
             }
         }
     }
+    // [mega_moe profiler] end whole-kernel span (cursor 1=end; stateless, reg_reconfig-safe)
+    MEGA_PROFILE_END(profiler_buffer, 1u, 0u);
 #else
     if (blockIdx.x == 0 and threadIdx.x == 0)
         DG_DEVICE_ASSERT(false and "This kernel only support sm_100f");
