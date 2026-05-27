@@ -50,31 +50,44 @@ PID = 0          # single process
 ROLES_PER_SM = 8  # tid stride: one track per (SM, role); roles use event_idx 0..4
 
 
-def to_chrome_trace(events, event_names):
-    """Chrome/Perfetto trace JSON. ONE process; one thread-track per (SM, warp-role).
+# Map event_idx -> (lane_id, lane_name). Events on the same lane share a track and
+# render as alternating colored slices — matching PR #316's "(c) Ours" diagram rows:
+#   Dispatch | Computation (L1,L2) | Activation&Combine (Act,Combine).
+LANE = {
+    0: (0, "Dispatch"),
+    1: (1, "TMA-A"), 2: (2, "TMA-B"), 3: (3, "MMA"), 4: (5, "Act&Combine"),
+    5: (3, "Computation"), 6: (3, "Computation"),   # L1, L2 -> one Computation row
+    7: (5, "Act&Combine"), 8: (5, "Act&Combine"),   # Act, Combine -> one row
+}
+LANES_PER_SM = 8
 
-    tid = sm*ROLES_PER_SM + role, so each SM's 5 role tracks (Dispatch / TMA-A /
-    TMA-B / MMA / Epilogue) are contiguous and sortable. Roles run concurrently on
-    different warps, so each gets its own track (their spans overlap in time).
+
+def to_chrome_trace(events, event_names):
+    """Chrome/Perfetto trace JSON. ONE process; per SM a few LANES (PR-diagram rows).
+
+    Events that belong to the same lane (e.g. L1+L2 -> Computation) share a tid and
+    render as a sequence of colored slices on one row (slice name = the event name,
+    so Perfetto colors L1 vs L2 differently), just like the PR "(c) Ours" figure.
     """
     out = []
-    tids = {}  # tid -> (sm, role)
+    tids = {}  # tid -> (sm, lane_name)
     for e in events:
-        role = e["eidx"]
-        rname = event_names[role] if role < len(event_names) else f"role{role}"
-        tid = e["sm"] * ROLES_PER_SM + role
+        eidx = e["eidx"]
+        ename = event_names[eidx] if eidx < len(event_names) else f"ev{eidx}"
+        lane_id, lane_name = LANE.get(eidx, (eidx, ename))
+        tid = e["sm"] * LANES_PER_SM + lane_id
         ph = {TYPE_BEGIN: "B", TYPE_END: "E", TYPE_INSTANT: "i"}[e["type"]]
-        rec = dict(name=rname, ph=ph, ts=e["ts"] / 1000.0,  # ns -> us
+        rec = dict(name=ename, ph=ph, ts=e["ts"] / 1000.0,
                    pid=PID, tid=tid, args={"cta": e["block"], "sm": e["sm"]})
         if ph == "i":
             rec["s"] = "t"
         out.append(rec)
-        tids[tid] = (e["sm"], rname)
+        tids[tid] = (e["sm"], lane_name)
     out.append(dict(name="process_name", ph="M", pid=PID,
-                    args={"name": "MegaMoE (per-SM, per-role)"}))
-    for tid, (sm, rname) in sorted(tids.items()):
+                    args={"name": "MegaMoE (per-SM, PR-style lanes)"}))
+    for tid, (sm, lane_name) in sorted(tids.items()):
         out.append(dict(name="thread_name", ph="M", pid=PID, tid=tid,
-                        args={"name": f"SM{sm:03d} {rname}"}))
+                        args={"name": f"SM{sm:03d} {lane_name}"}))
         out.append(dict(name="thread_sort_index", ph="M", pid=PID, tid=tid,
                         args={"sort_index": tid}))
     return {"traceEvents": out, "displayTimeUnit": "ns"}
