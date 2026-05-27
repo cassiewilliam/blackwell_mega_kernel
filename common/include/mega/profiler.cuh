@@ -87,22 +87,24 @@ struct Closure {
 //   group_idx  : warp-role 编号 [0, num_groups)
 //   num_groups : 总 group 数
 //   write_pred : 只有该线程为 true 时本 group 才写（通常各 role 的 leader lane）
-#define MEGA_PROFILER_INIT(buf, group_idx, num_groups, write_pred)                      \
+// NOTE: macro params are prefixed (p_*) to avoid colliding with Entry members
+// like `num_groups` (otherwise the preprocessor rewrites `_h.num_groups`).
+#define MEGA_PROFILER_INIT(p_buf, p_gi, p_ng, p_wp)                                     \
     ::mega::prof::Closure _mm_prof{};                                                   \
     do {                                                                                \
         const uint32_t _blk = blockIdx.x;                                               \
         const uint32_t _nbk = gridDim.x;                                                \
         if (_blk == 0 && threadIdx.x == 0) {                                            \
-            ::mega::prof::Entry _h; _h.num_blocks = _nbk; _h.num_groups = (num_groups); \
-            (buf)[0] = _h;                                                              \
+            ::mega::prof::Entry _h; _h.num_blocks = _nbk; _h.num_groups = (p_ng);       \
+            (p_buf)[0] = _h;                                                            \
         }                                                                               \
-        _mm_prof.buffer   = (buf);                                                      \
+        _mm_prof.buffer   = (p_buf);                                                    \
         _mm_prof.base_tag = ::mega::prof::encode_tag(                                   \
                                 ::mega::prof::read_smid(), _blk, 0, 0);                 \
-        _mm_prof.slot     = 1 + _blk * (num_groups) + (group_idx);                     \
-        _mm_prof.stride   = _nbk * (num_groups);                                        \
+        _mm_prof.slot     = 1 + _blk * (p_ng) + (p_gi);                                 \
+        _mm_prof.stride   = _nbk * (p_ng);                                              \
         _mm_prof.cursor   = 0;                                                          \
-        _mm_prof.active   = (write_pred);                                              \
+        _mm_prof.active   = (p_wp);                                                     \
     } while (0)
 
 #define MEGA_PROFILE_BEGIN(ev)   _mm_prof.emit((uint32_t)(ev), ::mega::prof::kBegin)
@@ -111,7 +113,7 @@ struct Closure {
 
 #else  // ---------------- 关闭：全部展开为空，零开销 ----------------
 
-#define MEGA_PROFILER_INIT(buf, group_idx, num_groups, write_pred) ((void)0)
+#define MEGA_PROFILER_INIT(p_buf, p_gi, p_ng, p_wp) ((void)0)
 #define MEGA_PROFILE_BEGIN(ev)   ((void)0)
 #define MEGA_PROFILE_END(ev)     ((void)0)
 #define MEGA_PROFILE_INSTANT(ev) ((void)0)
