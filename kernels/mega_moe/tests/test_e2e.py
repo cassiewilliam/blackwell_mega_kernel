@@ -88,7 +88,9 @@ def run(local_rank, num_local_ranks):
     # --- optional: per-SM Perfetto profiling run (needs JIT built with -DMEGA_ENABLE_PROFILER) ---
     if os.environ.get("MEGA_PROF"):
         num_sms = torch.cuda.get_device_properties(0).multi_processor_count
-        prof = mega_common.alloc_profiler_buffer(num_sms, num_groups=1, max_events=8)
+        # over-allocate generously to rule out OOB while bringing up the profiler
+        prof = mega_common.alloc_profiler_buffer(max(num_sms, 1024), num_groups=4, max_events=64)
+        print(f"[prof] num_sms={num_sms} buffer_entries={prof.numel()}")
         fill(buffer, x, topk_idx, topk_weights, NUM_TOKENS)
         torch.cuda.synchronize()
         mod.mega_moe(y_ours, tl1[0], tl1[1], tl2[0], tl2[1],
