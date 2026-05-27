@@ -1,9 +1,10 @@
 // =============================================================================
-// test_layout.cu —— host-only 单元测试：buffer 布局 + CPU 参考自洽性
+// test_layout.cu —— host-only unit test: buffer layout + CPU reference self-consistency
 // -----------------------------------------------------------------------------
-// 阶段 1 不需要 GPU：用 .cu 扩展名只是为统一，CMake 里按 CXX 语言编译。
-// 验证：(1) compute_buffer_layout 段不重叠且单调；(2) 五段 CPU 参考能跑通且
-// dispatch→combine 的 token 守恒（每个 token 的输出 = 其 topk 专家贡献之和）。
+// Stage 1 needs no GPU: the .cu extension is only for uniformity; CMake compiles it as CXX.
+// Verifies: (1) compute_buffer_layout segments are non-overlapping and monotonic; (2) the
+// 5-stage CPU reference runs end-to-end and token conservation holds across dispatch→combine
+// (each token's output = the sum of its topk experts' contributions).
 // =============================================================================
 #include <cassert>
 #include <cmath>
@@ -20,23 +21,23 @@ static int g_failures = 0;
 #define CHECK(cond, msg) do { if (!(cond)) { \
     std::printf("  [FAIL] %s\n", msg); ++g_failures; } } while (0)
 
-// --- 测试 1：buffer 段偏移单调递增、对齐、总量自洽 ---
+// --- Test 1: buffer segment offsets are monotonically increasing, aligned, and totals self-consistent ---
 static void test_buffer_layout() {
     std::printf("test_buffer_layout\n");
     BufferLayout L = compute_buffer_layout(kSmokeSingleGpu, /*block_m=*/128);
     uint64_t offs[] = {L.off_x, L.off_x_sf, L.off_topk_idx, L.off_topk_weights,
                        L.off_l1_acts, L.off_l1_acts_sf, L.off_l2_acts, L.off_l2_acts_sf};
     for (int i = 0; i < 8; ++i) {
-        CHECK(offs[i] % BufferLayout::kAlign == 0, "段未按 256B 对齐");
-        if (i) CHECK(offs[i] > offs[i - 1], "段偏移未严格递增");
-        CHECK(offs[i] < L.total_bytes, "段越界 total_bytes");
+        CHECK(offs[i] % BufferLayout::kAlign == 0, "segment not aligned to 256B");
+        if (i) CHECK(offs[i] > offs[i - 1], "segment offset not strictly increasing");
+        CHECK(offs[i] < L.total_bytes, "segment exceeds total_bytes");
     }
-    CHECK(L.pool_tokens >= kSmokeSingleGpu.num_max_tokens_per_rank, "pool 容量过小");
+    CHECK(L.pool_tokens >= kSmokeSingleGpu.num_max_tokens_per_rank, "pool capacity too small");
     std::printf("  total_bytes=%llu pool_tokens=%llu\n",
                 (unsigned long long)L.total_bytes, (unsigned long long)L.pool_tokens);
 }
 
-// --- 测试 2：CPU 五段参考 token 守恒 ---
+// --- Test 2: token conservation of the 5-stage CPU reference ---
 static void test_reference_pipeline() {
     std::printf("test_reference_pipeline\n");
     MoEConfig cfg = kSmokeSingleGpu;
@@ -55,7 +56,7 @@ static void test_reference_pipeline() {
     in.topk_weights.resize((size_t)num_tokens * TK);
     for (uint32_t t = 0; t < num_tokens; ++t)
         for (uint32_t k = 0; k < TK; ++k) {
-            in.topk_idx[t * TK + k] = exp(rng) % (int)E;  // 单 GPU：限定本地 expert
+            in.topk_idx[t * TK + k] = exp(rng) % (int)E;  // single GPU: restrict to local experts
             in.topk_weights[t * TK + k] = std::abs(uni(rng));
         }
     for (uint32_t e = 0; e < E; ++e) {
@@ -66,9 +67,9 @@ static void test_reference_pipeline() {
     }
 
     ref::Mat y = ref::run_reference(in, cfg, num_tokens);
-    CHECK(y.rows == num_tokens && y.cols == H, "输出形状错误");
+    CHECK(y.rows == num_tokens && y.cols == H, "wrong output shape");
 
-    // 守恒性：手动重算一个 token 的输出，与端到端对拍
+    // Conservation: manually recompute the output stage by stage and cross-check against end-to-end
     ref::DispatchResult d = ref::dispatch(in, cfg);
     ref::Mat l1 = ref::linear1(d, in, cfg);
     ref::Mat act = ref::swiglu(l1, d, cfg);
@@ -77,7 +78,7 @@ static void test_reference_pipeline() {
     float max_diff = 0.f;
     for (size_t i = 0; i < y.data.size(); ++i)
         max_diff = std::fmax(max_diff, std::fabs(y.data[i] - y2.data[i]));
-    CHECK(max_diff == 0.f, "端到端与分段重算不一致");
+    CHECK(max_diff == 0.f, "end-to-end and stage-by-stage recompute mismatch");
     std::printf("  pool_n=%u max_diff=%g\n", l1.rows, max_diff);
 }
 

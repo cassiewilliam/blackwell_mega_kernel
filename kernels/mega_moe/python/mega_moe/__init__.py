@@ -1,12 +1,14 @@
-"""mega_moe —— Python 入口（经 TVM FFI 调用 C++/CUDA kernel）。
+"""mega_moe —— Python entry point (calls the C++/CUDA kernel via TVM FFI).
 
-保留 Python/JIT 工作流，但绑定走 tvm_ffi（不依赖 pybind11 / torch C++ 扩展）。
-torch tensor 通过 DLPack 零拷贝传给 C++ 的 tvm::ffi::TensorView。
+Keeps the Python/JIT workflow, but the binding goes through tvm_ffi (no
+dependency on pybind11 / torch C++ extensions). torch tensors are passed to
+C++'s tvm::ffi::TensorView zero-copy via DLPack.
 
-通用加载/profiler 工具来自 mega_common（common/python/mega_common），本模块只放
-mega_moe 专属的 config 与调用封装。
+Generic loading/profiler utilities come from mega_common
+(common/python/mega_common); this module only holds the mega_moe-specific
+config and call wrappers.
 
-用法::
+Usage::
 
     import torch, mega_moe
     mod = mega_moe.load()                       # = mega_common.load()
@@ -19,16 +21,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-# 通用件复用 mega_common；MEGA_KERNEL_LIB 环境变量指向 libmega_moe_ffi.so
+# Reuse mega_common for shared components; the MEGA_KERNEL_LIB env var points to libmega_moe_ffi.so
 from mega_common import load, alloc_profiler_buffer, dump_profiler_buffer  # noqa: F401
 
-# mega_moe 的 warp-role 数（profiler 的 group 维度），与 include/mega_moe/events.h 一致
+# Number of warp-roles in mega_moe (the profiler's group dimension), matching include/mega_moe/events.h
 NUM_ROLES = 6
 
 
 @dataclass
 class MoEConfig:
-    """与 C++ include/mega_moe/shapes.h::MoEConfig 对应的 Python 镜像。"""
+    """Python mirror corresponding to C++ include/mega_moe/shapes.h::MoEConfig."""
     num_max_tokens_per_rank: int = 8192
     hidden: int = 7168
     intermediate_hidden: int = 3072
@@ -39,7 +41,7 @@ class MoEConfig:
     num_sms: int = 148
 
     def meta(self, num_tokens: int):
-        """打包成 C++ 侧约定的 int64 meta tensor（顺序见 bindings/mega_moe_ffi.cu）。"""
+        """Pack into the int64 meta tensor expected by the C++ side (order: see bindings/mega_moe_ffi.cu)."""
         import torch
         return torch.tensor(
             [num_tokens, self.num_max_tokens_per_rank, self.hidden,

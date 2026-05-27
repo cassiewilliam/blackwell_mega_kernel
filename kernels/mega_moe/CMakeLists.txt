@@ -1,12 +1,13 @@
 # =============================================================================
-# kernels/mega_moe —— SM100 FP8×FP4 Mega-MoE 子工程
+# kernels/mega_moe —— SM100 FP8×FP4 Mega-MoE subproject
 # -----------------------------------------------------------------------------
-# 由顶层 CMakeLists 通过 add_subdirectory 引入，继承 MEGA_* 全局选项与 mega_common。
-# 也可单独构建（standalone）：cmake -S kernels/mega_moe -B build。
+# Pulled in by the top-level CMakeLists via add_subdirectory, inheriting the
+# MEGA_* global options and mega_common.
+# Can also be built standalone: cmake -S kernels/mega_moe -B build.
 # =============================================================================
 cmake_minimum_required(VERSION 3.24)
 
-# standalone 构建时补齐顶层未定义的目标/选项
+# For standalone builds, fill in targets/options not defined by the top level
 if(NOT TARGET mega_common)
     project(mega_moe LANGUAGES CXX)
     set(CMAKE_CXX_STANDARD 20)
@@ -28,22 +29,22 @@ endif()
 
 set(MM_INC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
-# ----- host-only：CPU 参考库（纯 C++，永远可编译）-----
+# ----- host-only: CPU reference library (pure C++, always compilable) -----
 add_library(mega_moe_ref STATIC tests/reference_cpu.cc)
 target_include_directories(mega_moe_ref PUBLIC ${MM_INC} ${CMAKE_CURRENT_SOURCE_DIR}/tests)
 target_link_libraries(mega_moe_ref PUBLIC mega_common)
 
-# host-only 单元测试（无需 GPU）
+# host-only unit tests (no GPU required)
 add_executable(mega_moe_test_layout tests/test_layout.cu)
 set_source_files_properties(tests/test_layout.cu PROPERTIES LANGUAGE CXX)
 target_link_libraries(mega_moe_test_layout PRIVATE mega_moe_ref)
 add_test(NAME mega_moe_test_layout COMMAND mega_moe_test_layout)
 
-# ----- CUDA kernel + GPU 测试 -----
+# ----- CUDA kernel + GPU tests -----
 if(MEGA_BUILD_KERNEL)
     enable_language(CUDA)
     if(NOT MEGA_CUTLASS_DIR)
-        message(FATAL_ERROR "MEGA_BUILD_KERNEL=ON 需要 -DMEGA_CUTLASS_DIR=/path/to/cutlass/include")
+        message(FATAL_ERROR "MEGA_BUILD_KERNEL=ON requires -DMEGA_CUTLASS_DIR=/path/to/cutlass/include")
     endif()
     set(CMAKE_CUDA_STANDARD 20)
     set(CMAKE_CUDA_ARCHITECTURES 100a)
@@ -65,13 +66,13 @@ if(MEGA_BUILD_KERNEL)
     target_link_libraries(mega_moe_bench PRIVATE mega_moe mega_moe_ref)
 endif()
 
-# ----- TVM FFI 绑定共享库 -----
+# ----- TVM FFI binding shared library -----
 if(MEGA_BUILD_FFI)
     if(NOT MEGA_BUILD_KERNEL)
-        message(FATAL_ERROR "MEGA_BUILD_FFI=ON 需同时 -DMEGA_BUILD_KERNEL=ON")
+        message(FATAL_ERROR "MEGA_BUILD_FFI=ON also requires -DMEGA_BUILD_KERNEL=ON")
     endif()
     if(NOT MEGA_TVM_FFI_DIR)
-        message(FATAL_ERROR "MEGA_BUILD_FFI=ON 需要 -DMEGA_TVM_FFI_DIR=/path/to/tvm_ffi")
+        message(FATAL_ERROR "MEGA_BUILD_FFI=ON requires -DMEGA_TVM_FFI_DIR=/path/to/tvm_ffi")
     endif()
     add_library(mega_moe_ffi SHARED bindings/mega_moe_ffi.cu)
     set_target_properties(mega_moe_ffi PROPERTIES PREFIX "lib")

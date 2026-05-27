@@ -1,13 +1,15 @@
 // =============================================================================
-// reference_cpu.h —— 五段 MoE 管线的 CPU 黄金参考
+// reference_cpu.h —— CPU golden reference for the 5-stage MoE pipeline
 // -----------------------------------------------------------------------------
-// 纯 FP32 host 实现，用于和 GPU kernel 对拍。刻意写得"傻而直白"：每一段一个函数，
-// 直接照搬数学定义，不做任何量化/分块技巧——量化误差通过对拍容差吸收。
+// A pure FP32 host implementation, used to cross-check against the GPU kernel. Deliberately
+// written "dumb and straightforward": one function per stage, copying the math definition
+// directly, without any quantization/tiling tricks — quantization error is absorbed by the
+// comparison tolerance.
 //
-// 单 GPU stub（num_ranks == 1）语义：
-//   Dispatch = 按 topk_idx 把 token gather 到对应 expert 的连续池；
-//   Combine  = 按来源把 Linear2 输出 scatter 回去，并对 topk 维做加权求和。
-// multi-GPU 时 dispatch/combine 跨 rank，但单 rank 内的数学完全一样。
+// Single-GPU stub (num_ranks == 1) semantics:
+//   Dispatch = gather tokens into the contiguous pool of their target expert per topk_idx;
+//   Combine  = scatter the Linear2 output back by source, with weighted sum over the topk dim.
+// For multi-GPU, dispatch/combine cross ranks, but the math within a single rank is identical.
 // =============================================================================
 #pragma once
 
@@ -18,7 +20,7 @@
 
 namespace mega_moe::ref {
 
-// 行优先稠密矩阵的轻量视图（host FP32）。
+// Lightweight view of a row-major dense matrix (host FP32).
 struct Mat {
     std::vector<float> data;
     uint32_t rows = 0, cols = 0;
@@ -28,40 +30,40 @@ struct Mat {
     Mat(uint32_t r, uint32_t c) : data((size_t)r * c, 0.0f), rows(r), cols(c) {}
 };
 
-// 一次参考运行的全部输入（FP32，已"反量化"到真实数值域）。
+// All inputs for one reference run (FP32, already "dequantized" to the real value range).
 struct RefInputs {
     Mat x;                                  // [num_tokens, H]
-    std::vector<int32_t> topk_idx;          // [num_tokens * topk]，-1 = 该槽未路由
+    std::vector<int32_t> topk_idx;          // [num_tokens * topk], -1 = slot not routed
     std::vector<float>   topk_weights;      // [num_tokens * topk]
-    std::vector<Mat>     l1_weights;        // per-expert，每个 [2*I, H]（gate‖up，未 interleave）
-    std::vector<Mat>     l2_weights;        // per-expert，每个 [H, I]
+    std::vector<Mat>     l1_weights;        // per-expert, each [2*I, H] (gate‖up, not interleaved)
+    std::vector<Mat>     l2_weights;        // per-expert, each [H, I]
 };
 
-// dispatch 后的 token 池 + 反查表，供逐段对拍。
+// Post-dispatch token pool + reverse-lookup tables, for stage-by-stage cross-checking.
 struct DispatchResult {
-    Mat pool_x;                             // [pool_n, H]，按 expert 连续排布
+    Mat pool_x;                             // [pool_n, H], laid out contiguously by expert
     std::vector<int32_t> tokens_per_expert; // [num_experts_per_rank]
-    std::vector<int32_t> src_token;         // [pool_n] 每个池槽来自哪个 token
-    std::vector<int32_t> src_expert;        // [pool_n] 落到哪个本地 expert
-    std::vector<float>   src_weight;        // [pool_n] 对应 topk 权重
+    std::vector<int32_t> src_token;         // [pool_n] which token each pool slot comes from
+    std::vector<int32_t> src_expert;        // [pool_n] which local expert it lands in
+    std::vector<float>   src_weight;        // [pool_n] corresponding topk weight
 };
 
-// ① Dispatch：把每个 token 的每个有效 topk 路由展开到对应 expert 的池中。
+// ① Dispatch: expand each valid topk route of every token into the pool of its target expert.
 DispatchResult dispatch(const RefInputs& in, const MoEConfig& cfg);
 
-// ② Linear1：pool_x @ W1ᵀ → [pool_n, 2*I]，gate‖up 并排。
+// ② Linear1: pool_x @ W1ᵀ → [pool_n, 2*I], gate‖up side by side.
 Mat linear1(const DispatchResult& d, const RefInputs& in, const MoEConfig& cfg);
 
-// ③ SwiGLU：out = silu(gate) * up * weight，逐池槽乘各自 topk 权重。clamp 可选。
+// ③ SwiGLU: out = silu(gate) * up * weight, each pool slot multiplied by its own topk weight. clamp optional.
 Mat swiglu(const Mat& l1_out, const DispatchResult& d, const MoEConfig& cfg);
 
-// ④ Linear2：swiglu_out @ W2ᵀ → [pool_n, H]。
+// ④ Linear2: swiglu_out @ W2ᵀ → [pool_n, H].
 Mat linear2(const Mat& act, const DispatchResult& d, const RefInputs& in, const MoEConfig& cfg);
 
-// ⑤ Combine：按 src_token scatter 回 [num_tokens, H]，topk 维加权求和已含在池槽里。
+// ⑤ Combine: scatter back to [num_tokens, H] by src_token; the weighted sum over the topk dim is already contained in the pool slots.
 Mat combine(const Mat& l2_out, const DispatchResult& d, uint32_t num_tokens, const MoEConfig& cfg);
 
-// 端到端：跑完五段，返回 [num_tokens, H] 的 BF16-等价 FP32 结果。
+// End-to-end: run all five stages, returning the BF16-equivalent FP32 result of shape [num_tokens, H].
 Mat run_reference(const RefInputs& in, const MoEConfig& cfg, uint32_t num_tokens);
 
 }  // namespace mega_moe::ref

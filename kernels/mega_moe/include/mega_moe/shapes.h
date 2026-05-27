@@ -1,11 +1,14 @@
 // =============================================================================
-// shapes.h —— 编译期 config / 形状 traits
+// shapes.h —— compile-time config / shape traits
 // -----------------------------------------------------------------------------
-// Mega-MoE 是一个 fully-templated kernel：所有形状、分块、线程数都是编译期常量，
-// 这样编译器才能展开 TMA / UMMA 的 swizzle 与流水。本头文件把"一组自洽的模板参数"
-// 打包成 traits 结构，避免在 launch 处手写一长串数字。
+// Mega-MoE is a fully-templated kernel: all shapes, tilings, and thread counts
+// are compile-time constants, so that the compiler can unroll the TMA / UMMA
+// swizzle and pipeline. This header packs "one self-consistent set of template
+// parameters" into a traits struct, avoiding hand-writing a long string of
+// numbers at the launch site.
 //
-// 与 DeepGEMM 原版 `sm100_fp8_fp4_mega_moe_impl` 模板参数一一对应（见该文件 67-94 行）。
+// Corresponds one-to-one with the template parameters of DeepGEMM's original
+// `sm100_fp8_fp4_mega_moe_impl` (see lines 67-94 of that file).
 // =============================================================================
 #pragma once
 
@@ -14,8 +17,9 @@
 namespace mega_moe {
 
 // -----------------------------------------------------------------------------
-// 量化 recipe：(block_m, block_n, block_k) 的 scale-factor 粒度。
-// 默认 (1, 1, 32) = 沿 K 每 32 元素一个 UE8M0 scale（per-32），与原版一致。
+// Quantization recipe: scale-factor granularity of (block_m, block_n, block_k).
+// Default (1, 1, 32) = one UE8M0 scale per 32 elements along K (per-32),
+// matching the original.
 // -----------------------------------------------------------------------------
 struct Recipe {
     uint32_t sf_block_m = 1;
@@ -24,27 +28,28 @@ struct Recipe {
 };
 
 // -----------------------------------------------------------------------------
-// MoE 规模参数（运行期可变的那部分以外的、决定 kernel 模板实例的部分）。
+// MoE scale parameters (the part, beyond the runtime-variable portion, that
+// determines the kernel template instance).
 // -----------------------------------------------------------------------------
 struct MoEConfig {
-    // 【规模】
-    uint32_t num_max_tokens_per_rank;   // 每 rank 最多 token 数（对齐到 BLOCK_M）
-    uint32_t hidden;                    // H：输入/输出隐藏维
-    uint32_t intermediate_hidden;       // I：FFN 中间维（gate/up 各占 I）
-    uint32_t num_experts;               // 全局 expert 总数
-    uint32_t num_topk;                  // 每 token 路由到的 expert 数
+    // [Scale]
+    uint32_t num_max_tokens_per_rank;   // max number of tokens per rank (aligned to BLOCK_M)
+    uint32_t hidden;                    // H: input/output hidden dim
+    uint32_t intermediate_hidden;       // I: FFN intermediate dim (gate/up each take I)
+    uint32_t num_experts;               // total global expert count
+    uint32_t num_topk;                  // number of experts each token is routed to
 
-    // 【拓扑】
-    uint32_t num_ranks;                 // NVLink 域内 rank 数（单 GPU stub 时 = 1）
-    uint32_t num_sms;                   // 参与的 SM 数（persistent grid 大小）
+    // [Topology]
+    uint32_t num_ranks;                 // number of ranks in the NVLink domain (= 1 for single-GPU stub)
+    uint32_t num_sms;                   // number of participating SMs (persistent grid size)
 
-    // 【数值】
-    float activation_clamp;             // SwiGLU 前的 clamp（0 = 不 clamp）
-    bool fast_math;                     // 是否走快速 silu/exp 近似
+    // [Numerics]
+    float activation_clamp;             // clamp before SwiGLU (0 = no clamp)
+    bool fast_math;                     // whether to use the fast silu/exp approximation
 
     Recipe recipe{};
 
-    // —— 派生量 ——
+    // —— derived quantities ——
     constexpr uint32_t num_experts_per_rank() const { return num_experts / num_ranks; }
     constexpr uint32_t l1_shape_n() const { return intermediate_hidden * 2; }  // gate‖up
     constexpr uint32_t l1_shape_k() const { return hidden; }
@@ -53,26 +58,28 @@ struct MoEConfig {
 };
 
 // -----------------------------------------------------------------------------
-// 分块 / 流水 / 线程 config（与 MoEConfig 解耦，便于调参 sweep）。
-// 默认值来自 DeepGEMM 调优结果（perf_log 终态）。
+// Tiling / pipeline / thread config (decoupled from MoEConfig for easy parameter
+// sweeps). Default values come from the DeepGEMM tuning results (final state of
+// perf_log).
 // -----------------------------------------------------------------------------
 struct TileConfig {
-    uint32_t block_m = 128;             // token 分块（dispatch / GEMM 的 M 维）
-    uint32_t block_n = 128;             // 权重输出分块（N 维）
-    uint32_t block_k = 128;             // K 维分块（TMA swizzle 对齐 128B）
-    uint32_t store_block_m = 64;        // epilogue 写回分块
-    uint32_t num_stages = 4;            // K 维软件流水级数
+    uint32_t block_m = 128;             // token tiling (M dim of dispatch / GEMM)
+    uint32_t block_n = 128;             // weight output tiling (N dim)
+    uint32_t block_k = 128;             // K-dim tiling (TMA swizzle aligned to 128B)
+    uint32_t store_block_m = 64;        // epilogue write-back tiling
+    uint32_t num_stages = 4;            // number of K-dim software pipeline stages
 
-    uint32_t num_experts_per_wave = 1;  // scheduler 每 wave 处理的 expert 数
+    uint32_t num_experts_per_wave = 1;  // number of experts the scheduler processes per wave
 
-    // warp 角色线程数（必须满足 kernel 的 static_assert，见原版 117-120 行）
-    uint32_t num_dispatch_threads = 128;     // dispatch warps（% 128 == 0）
-    uint32_t num_non_epilogue_threads = 128; // GEMM TMA+MMA（严格 == 128）
-    uint32_t num_epilogue_threads = 128;     // epilogue + combine（% 128 == 0）
+    // warp-role thread counts (must satisfy the kernel's static_assert, see lines 117-120 of the original)
+    uint32_t num_dispatch_threads = 128;     // dispatch warps (% 128 == 0)
+    uint32_t num_non_epilogue_threads = 128; // GEMM TMA+MMA (strictly == 128)
+    uint32_t num_epilogue_threads = 128;     // epilogue + combine (% 128 == 0)
 };
 
 // -----------------------------------------------------------------------------
-// Qwen3.5 默认 config（README 表格对应值）。num_ranks 默认 1 = 单 GPU stub。
+// Qwen3.5 default config (values corresponding to the README table). num_ranks
+// defaults to 1 = single-GPU stub.
 // -----------------------------------------------------------------------------
 constexpr MoEConfig kQwen35Default = MoEConfig{
     /*num_max_tokens_per_rank=*/ 8192,
@@ -80,14 +87,15 @@ constexpr MoEConfig kQwen35Default = MoEConfig{
     /*intermediate_hidden=*/     3072,
     /*num_experts=*/             384,
     /*num_topk=*/                6,
-    /*num_ranks=*/               1,      // 单 GPU stub；multi-GPU 时改 6
-    /*num_sms=*/                 148,    // B200 SM 数；按实际设备调整
+    /*num_ranks=*/               1,      // single-GPU stub; change to 6 for multi-GPU
+    /*num_sms=*/                 148,    // B200 SM count; adjust to the actual device
     /*activation_clamp=*/        0.0f,
     /*fast_math=*/               true,
     /*recipe=*/                  Recipe{},
 };
 
-// 单 GPU 冒烟测试用的小 config，便于 CPU 参考对拍。
+// Small config for single-GPU smoke testing, convenient for cross-checking
+// against the CPU reference.
 constexpr MoEConfig kSmokeSingleGpu = MoEConfig{
     /*num_max_tokens_per_rank=*/ 256,
     /*hidden=*/                  512,

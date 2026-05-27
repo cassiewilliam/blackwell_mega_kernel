@@ -1,5 +1,5 @@
 // =============================================================================
-// reference_cpu.cc —— 五段 MoE 管线 CPU 参考实现（见 reference_cpu.h）
+// reference_cpu.cc —— CPU reference implementation of the 5-stage MoE pipeline (see reference_cpu.h)
 // =============================================================================
 #include "reference_cpu.h"
 
@@ -20,11 +20,11 @@ DispatchResult dispatch(const RefInputs& in, const MoEConfig& cfg) {
     const uint32_t TK = cfg.num_topk;
     const uint32_t E  = cfg.num_experts_per_rank();
 
-    // 单 GPU stub：本 rank 拥有 expert id [0, E)。multi-GPU 时这里要按 rank 偏移筛选。
+    // Single-GPU stub: this rank owns expert ids [0, E). For multi-GPU, filter by rank offset here.
     DispatchResult d;
     d.tokens_per_expert.assign(E, 0);
 
-    // 先统计每个本地 expert 收到多少 token（用于连续排布的起始偏移）。
+    // First count how many tokens each local expert receives (used as start offset for contiguous layout).
     for (uint32_t t = 0; t < num_tokens; ++t)
         for (uint32_t k = 0; k < TK; ++k) {
             int32_t e = in.topk_idx[(size_t)t * TK + k];
@@ -55,7 +55,7 @@ DispatchResult dispatch(const RefInputs& in, const MoEConfig& cfg) {
 }
 
 // -----------------------------------------------------------------------------
-// ② Linear1：pool_x @ W1ᵀ，W1 形状 [2*I, H]，输出 [pool_n, 2*I]
+// ② Linear1: pool_x @ W1ᵀ, W1 shape [2*I, H], output [pool_n, 2*I]
 // -----------------------------------------------------------------------------
 Mat linear1(const DispatchResult& d, const RefInputs& in, const MoEConfig& cfg) {
     const uint32_t H = cfg.hidden;
@@ -73,7 +73,7 @@ Mat linear1(const DispatchResult& d, const RefInputs& in, const MoEConfig& cfg) 
 }
 
 // -----------------------------------------------------------------------------
-// ③ SwiGLU：gate = out[:, :I], up = out[:, I:]，act = silu(gate)*up*weight
+// ③ SwiGLU: gate = out[:, :I], up = out[:, I:], act = silu(gate)*up*weight
 // -----------------------------------------------------------------------------
 Mat swiglu(const Mat& l1_out, const DispatchResult& d, const MoEConfig& cfg) {
     const uint32_t I = cfg.intermediate_hidden;
@@ -84,7 +84,7 @@ Mat swiglu(const Mat& l1_out, const DispatchResult& d, const MoEConfig& cfg) {
         for (uint32_t i = 0; i < I; ++i) {
             float gate = l1_out.at(s, i);
             float up   = l1_out.at(s, I + i);
-            if (clamp > 0.0f) {   // 与原版一致：先把 gate/up clamp 到 [-clamp, clamp]
+            if (clamp > 0.0f) {   // Matches the original: first clamp gate/up to [-clamp, clamp]
                 gate = std::fmax(-clamp, std::fmin(clamp, gate));
                 up   = std::fmax(-clamp, std::fmin(clamp, up));
             }
@@ -95,7 +95,7 @@ Mat swiglu(const Mat& l1_out, const DispatchResult& d, const MoEConfig& cfg) {
 }
 
 // -----------------------------------------------------------------------------
-// ④ Linear2：act @ W2ᵀ，W2 形状 [H, I]，输出 [pool_n, H]
+// ④ Linear2: act @ W2ᵀ, W2 shape [H, I], output [pool_n, H]
 // -----------------------------------------------------------------------------
 Mat linear2(const Mat& act, const DispatchResult& d, const RefInputs& in, const MoEConfig& cfg) {
     const uint32_t H = cfg.hidden;
@@ -113,11 +113,11 @@ Mat linear2(const Mat& act, const DispatchResult& d, const RefInputs& in, const 
 }
 
 // -----------------------------------------------------------------------------
-// ⑤ Combine：按 src_token scatter+accumulate（topk 加权已并入池槽的 src_weight）
+// ⑤ Combine: scatter+accumulate by src_token (topk weighting is already folded into the pool slot's src_weight)
 // -----------------------------------------------------------------------------
 Mat combine(const Mat& l2_out, const DispatchResult& d, uint32_t num_tokens, const MoEConfig& cfg) {
     const uint32_t H = cfg.hidden;
-    Mat y(num_tokens, H);   // 零初始化
+    Mat y(num_tokens, H);   // zero-initialized
     for (uint32_t s = 0; s < l2_out.rows; ++s) {
         int32_t t = d.src_token[s];
         if (t < 0) continue;
@@ -127,7 +127,7 @@ Mat combine(const Mat& l2_out, const DispatchResult& d, uint32_t num_tokens, con
 }
 
 // -----------------------------------------------------------------------------
-// 端到端
+// End-to-end
 // -----------------------------------------------------------------------------
 Mat run_reference(const RefInputs& in, const MoEConfig& cfg, uint32_t num_tokens) {
     DispatchResult d = dispatch(in, cfg);

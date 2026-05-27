@@ -1,13 +1,16 @@
 // =============================================================================
-// workspace.h —— host 侧 workspace / symmetric-buffer 尺寸计算
+// workspace.h —— host-side workspace / symmetric-buffer size computation
 // -----------------------------------------------------------------------------
-// 对应 DeepGEMM 的 `_C.get_symm_buffer_size_for_mega_moe(...)`（见 mega/__init__.py 32-37）。
-// Mega-MoE 的所有中间数据都落在一块"对称缓冲区"里——单 GPU stub 时它就是一块普通
-// device 内存；multi-GPU 时它是 NVLink 对称内存（每个 rank 同地址映射），dispatch/combine
-// 直接对远端 rank 的同名 buffer 做 TMA pull/push。
+// Corresponds to DeepGEMM's `_C.get_symm_buffer_size_for_mega_moe(...)` (see
+// mega/__init__.py 32-37). All of Mega-MoE's intermediate data lands in a single
+// "symmetric buffer" — for a single-GPU stub it is just ordinary device memory;
+// for multi-GPU it is NVLink symmetric memory (same address mapping on every
+// rank), and dispatch/combine directly perform TMA pull/push on the remote
+// rank's same-named buffer.
 //
-// 这里只做 host 侧的"算尺寸 + 切 view"，不涉及 NVLink rendezvous（那部分在阶段 2 的
-// symm_buffer.h 里）。本头文件 host-only，纯 C++，可被测试单独编译。
+// This only does the host-side "compute sizes + slice views", and does not
+// involve NVLink rendezvous (that part is in stage 2's symm_buffer.h). This
+// header is host-only, pure C++, and can be compiled independently for tests.
 // =============================================================================
 #pragma once
 
@@ -18,20 +21,21 @@
 
 namespace mega_moe {
 
-// 把 v 向上对齐到 a 的整数倍。
+// Align v up to the nearest integer multiple of a.
 constexpr uint64_t align_up(uint64_t v, uint64_t a) { return (v + a - 1) / a * a; }
 
 // -----------------------------------------------------------------------------
-// 缓冲区内各段的字节偏移（相对 buffer 基址）。所有段按 256B 对齐以满足 TMA。
-// 段的含义（与 SymmBuffer slice 对应，mega/__init__.py 45-48）：
-//   x          : 输入 token，FP8 E4M3                       [max_tokens, H]
-//   x_sf       : x 的 UE8M0 scale，packed int               [max_tokens, H/32 packed]
-//   topk_idx   : 路由目标 expert id，int32                  [max_tokens, topk]
-//   topk_weights: 路由权重，float                            [max_tokens, topk]
-//   l1_acts    : dispatch 后落到本 rank expert 的 token 池   [pool_tokens, H] FP8
-//   l1_acts_sf : 上者的 scale                               [pool_tokens, H/32]
-//   l2_acts    : SwiGLU 输出（Linear2 输入）FP8             [pool_tokens, I]
-//   l2_acts_sf : 上者的 scale                               [pool_tokens, I/32]
+// Byte offsets of each segment within the buffer (relative to the buffer base
+// address). All segments are aligned to 256B to satisfy TMA.
+// Segment meanings (corresponding to the SymmBuffer slices, mega/__init__.py 45-48):
+//   x          : input tokens, FP8 E4M3                          [max_tokens, H]
+//   x_sf       : UE8M0 scale of x, packed int                    [max_tokens, H/32 packed]
+//   topk_idx   : routing target expert id, int32                 [max_tokens, topk]
+//   topk_weights: routing weights, float                         [max_tokens, topk]
+//   l1_acts    : token pool landing on this rank's experts after dispatch [pool_tokens, H] FP8
+//   l1_acts_sf : scale of the above                              [pool_tokens, H/32]
+//   l2_acts    : SwiGLU output (Linear2 input) FP8               [pool_tokens, I]
+//   l2_acts_sf : scale of the above                              [pool_tokens, I/32]
 // -----------------------------------------------------------------------------
 struct BufferLayout {
     static constexpr uint64_t kAlign = 256;
@@ -46,19 +50,21 @@ struct BufferLayout {
     uint64_t off_l2_acts_sf = 0;
     uint64_t total_bytes    = 0;
 
-    // pool 容量：本 rank 最多承接的 token 数 = max_tokens * topk（最坏全路由到本 rank）
-    // 实际原版会按 expert/wave 再细分，这里给安全上界，阶段 1 够用。
+    // pool capacity: max number of tokens this rank can take on = max_tokens * topk
+    // (worst case: everything routes to this rank). The original further subdivides
+    // by expert/wave; here we give a safe upper bound, sufficient for stage 1.
     uint64_t pool_tokens    = 0;
 };
 
-// FP8 E4M3 = 1 byte；FP4 packed = 0.5 byte；packed UE8M0 scale 这里按 1 byte/elem 估上界。
+// FP8 E4M3 = 1 byte; FP4 packed = 0.5 byte; packed UE8M0 scale is estimated here
+// as an upper bound at 1 byte/elem.
 inline BufferLayout compute_buffer_layout(const MoEConfig& cfg, uint32_t block_m) {
     const uint64_t T   = align_up(cfg.num_max_tokens_per_rank, block_m);
     const uint64_t H   = cfg.hidden;
     const uint64_t I   = cfg.intermediate_hidden;
     const uint64_t TK  = cfg.num_topk;
     const uint64_t sfK = cfg.recipe.sf_block_k;       // 32
-    const uint64_t pool = align_up(T * TK, block_m);  // dispatch 后的 token 池上界
+    const uint64_t pool = align_up(T * TK, block_m);  // upper bound of the token pool after dispatch
 
     BufferLayout L;
     L.pool_tokens = pool;

@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-"""export_perfetto.py —— 把 device 侧 profiler buffer 解码成 Perfetto trace。
+"""export_perfetto.py —— decode the device-side profiler buffer into a Perfetto trace.
 
-对应 detail/profiler.cuh 的编码格式，以及 FlashInfer profiler/__init__.py 的
-导出思路（每个 SM 一条 track，下挂 blk{block}_g{group} 子 track）。
+Matches the encoding format of detail/profiler.cuh, and the export approach of
+FlashInfer's profiler/__init__.py (one track per SM, with blk{block}_g{group} sub-tracks under it).
 
-buffer 布局（int64/uint64 数组）：
-    [0]            : header，低 32 位 = num_blocks，高 32 位 = num_groups
-    [1 + b*G + g + k*(B*G)] : 第 (block b, group g) 的第 k 条事件
-        低 32 位 tag :  [1:0]=type  [11:2]=event_idx  [23:12]=block  [31:24]=sm
-        高 32 位     :  globaltimer_lo 时间戳（ns）
+buffer layout (int64/uint64 array):
+    [0]            : header, low 32 bits = num_blocks, high 32 bits = num_groups
+    [1 + b*G + g + k*(B*G)] : the k-th event of (block b, group g)
+        low 32 bits tag :  [1:0]=type  [11:2]=event_idx  [23:12]=block  [31:24]=sm
+        high 32 bits    :  globaltimer_lo timestamp (ns)
 
-用法::
+Usage::
     python tools/export_perfetto.py prof.bin -o trace.json
-    # 然后把 trace.json 拖进 https://ui.perfetto.dev
+    # then drag trace.json into https://ui.perfetto.dev
 """
 from __future__ import annotations
 
@@ -120,7 +120,7 @@ def main():
     with open(args.out, "w") as f:
         json.dump(trace, f)
     print(f"blocks={nb} groups={ng} events={len(events)} -> {args.out}")
-    print("打开 https://ui.perfetto.dev 并加载该 json")
+    print("Open https://ui.perfetto.dev and load this json")
 
 
 if __name__ == "__main__":

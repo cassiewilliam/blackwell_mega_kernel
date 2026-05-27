@@ -1,23 +1,26 @@
 // =============================================================================
-// mega/profiler.cuh —— per-SM Perfetto 时间线探针（device 侧，跨 kernel 共享）
+// mega/profiler.cuh —— per-SM Perfetto timeline probe (device side, shared across kernels)
 // -----------------------------------------------------------------------------
-// blackwell_mega_kernel 仓库的**通用**探针，所有 mega kernel（mega_moe / 未来的
-// mega_ffn / mega_attention …）共用。仿照 FlashInfer 的 profiler.cuh（commit
-// c802a05）：给每个 warp-role 区段打 begin/end 事件，事件携带 (timestamp,
-// block_id, sm_id, event_id, event_type)，写进一块全局 buffer；跑完后用
-// common/tools/export_perfetto.py 转成 Perfetto trace（每 SM 一条 track）。
+// A **generic** probe in the blackwell_mega_kernel repo, shared by all mega kernels
+// (mega_moe / the future mega_ffn / mega_attention ...). Modeled on FlashInfer's
+// profiler.cuh (commit c802a05): emit begin/end events for each warp-role region,
+// with each event carrying (timestamp, block_id, sm_id, event_id, event_type), written
+// into a global buffer; after the run, use common/tools/export_perfetto.py to convert
+// it into a Perfetto trace (one track per SM).
 //
-// 设计要点：
-//   * 全程由 MEGA_ENABLE_PROFILER 宏开关。**未定义时所有宏展开为空**，零开销。
-//   * 事件记录 8 字节：union{ {num_blocks,num_groups} 头; {tag,delta_time} 事件 }
-//     tag 位域： [1:0]=event_type  [11:2]=event_idx  [23:12]=block_id  [31:24]=sm_id
-//   * sm_id  ← `mov.u32 %0, %smid;`；时间戳 ← `mov.u32 %0, %globaltimer_lo;`
-//   * buffer 写偏移：每个 (block, group) 固定 slot，无 atomic：
-//       slot   = 1 + block_id * num_groups + group_id   （+1 跳过 header）
+// Design points:
+//   * Entirely toggled by the MEGA_ENABLE_PROFILER macro. **When undefined, all macros
+//     expand to nothing**, zero overhead.
+//   * Each event record is 8 bytes: union{ {num_blocks,num_groups} header; {tag,delta_time} event }
+//     tag bit fields: [1:0]=event_type  [11:2]=event_idx  [23:12]=block_id  [31:24]=sm_id
+//   * sm_id  ← `mov.u32 %0, %smid;`; timestamp ← `mov.u32 %0, %globaltimer_lo;`
+//   * buffer write offset: each (block, group) has a fixed slot, no atomic:
+//       slot   = 1 + block_id * num_groups + group_id   (+1 to skip the header)
 //       stride = num_blocks * num_groups
 //
-// 每个 kernel 自定义自己的 event id 枚举（int 即可），并约定与 export_perfetto.py
-// 的事件名称表一一对应。本头文件不绑定具体 kernel 的事件语义。
+// Each kernel defines its own event id enum (an int is enough), and agrees to match the
+// event name table in export_perfetto.py one-to-one. This header does not bind the
+// event semantics of any specific kernel.
 // =============================================================================
 #pragma once
 
@@ -36,7 +39,7 @@ struct Entry {
 }  // namespace mega::prof
 
 // -----------------------------------------------------------------------------
-// 开关：默认关闭，零开销。打开方式：编译时 -DMEGA_ENABLE_PROFILER
+// Toggle: off by default, zero overhead. To enable: compile with -DMEGA_ENABLE_PROFILER
 // -----------------------------------------------------------------------------
 #ifdef MEGA_ENABLE_PROFILER
 
