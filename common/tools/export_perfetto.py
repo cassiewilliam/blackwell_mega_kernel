@@ -22,7 +22,7 @@ import struct
 
 # Default event names = mega_moe warp roles (event_idx order; see the kernel probes).
 # Override with --events, comma-separated, in event_idx order.
-DEFAULT_EVENT_NAMES = ["Dispatch", "TMA-A", "TMA-B", "MMA", "Epilogue", "L1", "L2"]
+DEFAULT_EVENT_NAMES = ["Dispatch", "TMA-A", "TMA-B", "MMA", "Epilogue", "L1", "L2", "Act", "Combine"]
 TYPE_BEGIN, TYPE_END, TYPE_INSTANT = 0, 1, 2
 
 

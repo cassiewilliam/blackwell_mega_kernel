@@ -919,7 +919,9 @@ sm100_fp8_fp4_mega_moe_impl(void* y,
     } else if (warp_idx >= kNumDispatchWarps + kNumMMANonEpilogueWarps) {
         // Adjust registers
         cutlass::arch::warpgroup_reg_alloc<kNumEpilogueRegisters>();
-        MEGA_PROFILE_BEGIN(profiler_buffer, warp_idx == kNumDispatchWarps + kNumMMANonEpilogueWarps && lane_idx == 0, 4u, kProfNumGroups, 4u);  // [prof] Epilogue
+#ifndef MEGA_PROFILE_BLOCKS
+        MEGA_PROFILE_BEGIN(profiler_buffer, warp_idx == kNumDispatchWarps + kNumMMANonEpilogueWarps && lane_idx == 0, 4u, kProfNumGroups, 4u);  // [prof] Epilogue (coarse span)
+#endif
 
         // NOTES: tensor memory addresses are simplified, as the hardware will ignore the warp index bits,
         // i.e., no need for `tmem_ptr |= (epilogue_warp_idx * 32) << 16`.
@@ -958,6 +960,12 @@ sm100_fp8_fp4_mega_moe_impl(void* y,
                                      const uint32_t& local_expert_idx,
                                      const uint32_t& num_k_blocks,
                                      const uint32_t& m_block_idx, const uint32_t& n_block_idx) {
+#ifdef MEGA_PROFILE_BLOCKS
+            // [prof] per-tile Act&Combine: group 4, event 7=Act(post-L1 SwiGLU) / 8=Combine(post-L2)
+            const uint32_t _ep_iter = current_iter_idx;
+            const uint32_t _ep_ev = (block_phase == sched::BlockPhase::Linear1) ? 7u : 8u;
+            MEGA_PROFILE_BEGIN_AT(profiler_buffer, warp_idx == kNumDispatchWarps + kNumMMANonEpilogueWarps && lane_idx == 0, 4u, kProfNumGroups, 2u * _ep_iter, _ep_ev);
+#endif
             // Wait UMMA arrival
             const auto accum_stage_idx = current_iter_idx % kNumEpilogueStages;
             const auto accum_phase = (current_iter_idx ++ / kNumEpilogueStages) & 1;
@@ -1255,6 +1263,9 @@ sm100_fp8_fp4_mega_moe_impl(void* y,
                 // Ensure the next epilogue safe to use shared memory
                 ptx::sync_aligned(kNumEpilogueThreads, kEpilogueFullBarrierIdx);
             }
+#ifdef MEGA_PROFILE_BLOCKS
+            MEGA_PROFILE_END_AT(profiler_buffer, warp_idx == kNumDispatchWarps + kNumMMANonEpilogueWarps && lane_idx == 0, 4u, kProfNumGroups, 2u * _ep_iter + 1u, _ep_ev);  // [prof] end Act/Combine
+#endif
         });
 
         // Deallocate tensor memory
@@ -1403,7 +1414,9 @@ sm100_fp8_fp4_mega_moe_impl(void* y,
                 __syncwarp();
             }
         }
-        MEGA_PROFILE_END(profiler_buffer, warp_idx == kNumDispatchWarps + kNumMMANonEpilogueWarps && lane_idx == 0, 4u, kProfNumGroups, 4u);  // [prof] end Epilogue
+#ifndef MEGA_PROFILE_BLOCKS
+        MEGA_PROFILE_END(profiler_buffer, warp_idx == kNumDispatchWarps + kNumMMANonEpilogueWarps && lane_idx == 0, 4u, kProfNumGroups, 4u);  // [prof] end Epilogue (coarse span)
+#endif
     }
 #else
     if (blockIdx.x == 0 and threadIdx.x == 0)
