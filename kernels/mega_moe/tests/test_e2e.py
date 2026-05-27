@@ -18,7 +18,7 @@ from deep_gemm.utils.dist import init_dist
 
 import tvm_ffi
 
-H, I = 512, 256          # hidden, intermediate (both % 128 == 0)
+H, I = 512, 512          # hidden, intermediate; dim/32 must be 16B-aligned (=> dim % 512 == 0)
 E, TK = 8, 2             # experts, top-k
 NUM_MAX = 128            # max tokens/rank (aligned up to block_m internally)
 NUM_TOKENS = 64
