@@ -108,10 +108,29 @@ open it at https://ui.perfetto.dev.
 
 ## Status
 
-- [x] Project scaffold + public API + CPU reference (ctest passing)
-- [x] TVM FFI binding skeleton + per-SM Perfetto probe + export tool
-- [ ] Vendor `detail/` headers (layout/scheduler/barrier/tma/mma/tcgen05)
-- [ ] Split the main kernel into five phases + profiler event anchors
-- [ ] Single-GPU stub end-to-end (called via tvm-ffi, checked against reference_cpu)
-- [ ] Multi-GPU NVLink (SymmBuffer + dispatch/combine)
+- [x] Vendored DeepGEMM (latest 2.5.0+714dd1a): kernel + JIT + launcher, unchanged
+- [x] **TVM-FFI bridge** — `mega_moe()` callable from Python; JIT-compiles the kernel
+- [x] **End-to-end on B200** — output bit-identical to `deep_gemm.fp8_fp4_mega_moe`
+      (`max|ours-ref| = 0`), via `tests/test_e2e.py`
+- [x] **per-SM Perfetto profiler** — 148 SMs × begin/end spans → trace JSON
+      (`MEGA_PROF=1 DG_JIT_EXTRA_FLAGS=-DMEGA_ENABLE_PROFILER`), zero-cost when off
+- [ ] Expand profiler probes to the 5 phases (dispatch/L1/swiglu/L2/combine)
+- [ ] Multi-GPU NVLink (SymmBuffer + dispatch/combine across ranks)
+
+## Running on the B200 container
+
+```bash
+# build the TVM-FFI bridge .so (g++)
+bash kernels/mega_moe/build_ffi.sh        # -> build_ffi/libmega_moe_ffi.so + jit_root/
+
+# correctness (vs deep_gemm), profiler off
+MEGA_MOE_LIB=build_ffi/libmega_moe_ffi.so MEGA_JIT_ROOT=build_ffi/jit_root \
+  python kernels/mega_moe/tests/test_e2e.py          # -> [rank 0] PASS
+
+# per-SM Perfetto trace (JIT compiles the kernel with -DMEGA_ENABLE_PROFILER)
+MEGA_PROF=1 DG_JIT_EXTRA_FLAGS=-DMEGA_ENABLE_PROFILER \
+MEGA_MOE_LIB=build_ffi/libmega_moe_ffi.so MEGA_JIT_ROOT=build_ffi/jit_root \
+  python kernels/mega_moe/tests/test_e2e.py          # -> prof.bin
+python common/tools/export_perfetto.py prof.bin -o trace.json   # open at ui.perfetto.dev
+```
 ```
