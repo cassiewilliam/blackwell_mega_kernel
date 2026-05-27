@@ -1,0 +1,21 @@
+# Build
+build/
+*.o
+*.so
+*.cubin
+*.ptx
+*.fatbin
+
+# IDE
+.vscode/
+.idea/
+.cache/
+compile_commands.json
+
+# Vendored CUTLASS (fetched by CMake, see README)
+third_party/cutlass/
+
+# Artifacts
+*.ncu-rep
+*.nsys-rep
+*.log
