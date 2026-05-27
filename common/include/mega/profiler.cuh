@@ -55,6 +55,17 @@ __device__ __forceinline__ uint32_t read_smid() {
 __device__ __forceinline__ uint32_t read_globaltimer_lo() {
     uint32_t t; asm volatile("mov.u32 %0, %%globaltimer_lo;" : "=r"(t)); return t;
 }
+// Low-overhead per-SM clock (a few cycles, doesn't serialize like %globaltimer).
+// Per-SM (not cross-SM synchronized), but fine for per-SM-track timelines.
+// Default timestamp source unless MEGA_PROFILER_USE_GLOBALTIMER is set.
+__device__ __forceinline__ uint32_t read_clock_lo() {
+    return static_cast<uint32_t>(clock64());
+}
+#ifdef MEGA_PROFILER_USE_GLOBALTIMER
+#define MEGA_PROF_NOW() ::mega::prof::read_globaltimer_lo()
+#else
+#define MEGA_PROF_NOW() ::mega::prof::read_clock_lo()
+#endif
 __device__ __forceinline__ uint32_t encode_tag(uint32_t sm, uint32_t block,
                                                 uint32_t event_idx, uint32_t type) {
     return (sm << kSmShift) | (block << kBlockShift) |
@@ -76,7 +87,7 @@ __device__ __forceinline__ void write_event(void* buf, bool active, uint32_t gro
     const uint32_t blk = blockIdx.x, nbk = gridDim.x;
     Entry e;
     e.tag = encode_tag(read_smid(), blk, event_idx, type);
-    e.delta_time = read_globaltimer_lo();
+    e.delta_time = MEGA_PROF_NOW();
     const uint32_t slot = 1 + (blk * num_groups + group);
     reinterpret_cast<Entry*>(buf)[slot + (size_t)cursor * (nbk * num_groups)] = e;
 }
