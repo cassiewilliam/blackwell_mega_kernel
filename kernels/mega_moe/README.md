@@ -39,7 +39,8 @@ both Linear1 and Linear2, eliminating cross-SM reduction — only a per-block ar
 | `num_max_tokens_per_rank` | 8192 |
 | Quantization | input FP8 (E4M3, per-32 UE8M0 SF), weights FP4 (per-32 UE8M0 SF) |
 
-See [include/mega_moe/shapes.h](include/mega_moe/shapes.h).
+Config/heuristics (block sizes, stages) live in
+[src/csrc/jit_kernels/heuristics/mega_moe.hpp](src/csrc/jit_kernels/heuristics/mega_moe.hpp).
 
 ## Layout
 
@@ -59,9 +60,7 @@ kernels/mega_moe/
 │       └── jit_kernels/heuristics/mega_moe.hpp  config heuristics (block_m, stages, …) — tune here
 ├── bindings/mega_moe_ffi.cu          TVM FFI bridge (DLPack TensorView → torch → launcher)
 ├── python/mega_moe/__init__.py       kernel-specific config (reuses mega_common.load)
-├── include/mega_moe/                 host-side CPU-reference helpers (shapes/workspace/events)
-├── tests/                            reference_cpu.{h,cc}, test_layout.cu, test_e2e.py
-├── bench/                            (perf via DeepGEMM's tests/test_mega_moe.py — see docs)
+├── tests/test_e2e.py                 multi-rank end-to-end test (vs deep_gemm)
 └── build_ffi.sh                      builds the .so + merged include trees (jit_root/host_root)
 ```
 
@@ -70,14 +69,10 @@ kernels/mega_moe/
 > trees** so `<deep_gemm/...>` and `csrc/...` resolve the MegaMoE files to `src/` and
 > everything else to `common/vendor/`.
 
-## Build / run
+## Build / run (B200 container)
 
 ```bash
-# host-only CPU reference + unit test (no GPU)
-cmake -S kernels/mega_moe -B build && cmake --build build -j && ctest --test-dir build
-
-# CUDA: build the TVM-FFI .so (B200 container), then end-to-end test
-bash kernels/mega_moe/build_ffi.sh
+bash kernels/mega_moe/build_ffi.sh                 # -> build_ffi/{libmega_moe_ffi.so, jit_root}
 MEGA_MOE_LIB=build_ffi/libmega_moe_ffi.so MEGA_JIT_ROOT=build_ffi/jit_root \
   python kernels/mega_moe/tests/test_e2e.py        # multi-rank; checks vs deep_gemm
 
@@ -95,21 +90,19 @@ export is `TVM_FFI_DLL_EXPORT_TYPED_FUNC(mega_moe, MegaMoE)`. From Python:
 
 ## per-SM Perfetto tracing at a glance
 The generic probe is in [`../../common/include/mega/profiler.cuh`](../../common/include/mega/profiler.cuh);
-mega_moe's events/roles are in [include/mega_moe/events.h](include/mega_moe/events.h)
-(group = warp role: dispatch/tma_a/tma_b/mma/epilogue/combine). After a run, dump the
-buffer and run `python ../../common/tools/export_perfetto.py prof.bin -o trace.json`, then
-open it at https://ui.perfetto.dev.
+the kernel's `#ifdef MEGA_ENABLE_PROFILER` probes are in
+[src/deep_gemm/impls/sm100_fp8_fp4_mega_moe.cuh](src/deep_gemm/impls/sm100_fp8_fp4_mega_moe.cuh)
+(warp roles: dispatch / tma-a / tma-b / mma / epilogue; per-tile L1/L2/Act/Combine with
+`-DMEGA_PROFILE_BLOCKS`). Dump the buffer, then
+`python ../../common/tools/export_perfetto.py prof.bin -o trace.json` → open at
+https://ui.perfetto.dev. **Full guide: [../../docs/profiling.md](../../docs/profiling.md).**
 
-## Mapping to the original
+## Provenance
 
-| This project | DeepGEMM source |
-|---|---|
-| `src/mega_moe_sm100.cu` | `deep_gemm/include/deep_gemm/impls/sm100_fp8_fp4_mega_moe.cuh` |
-| `include/mega_moe/detail/layout.cuh` | `layout/mega_moe.cuh` |
-| `include/mega_moe/detail/scheduler.cuh` | `scheduler/mega_moe.cuh` |
-| `include/mega_moe/detail/barrier.cuh` | `comm/barrier.cuh` |
-| `src/weight_transform.cu` | `deep_gemm/mega/__init__.py`'s `_interleave_l1_weights` / `_transpose_sf_for_utccp` |
-| `tests/` | `tests/test_mega_moe.py` (de-PyTorch'd) |
+Derived from [DeepGEMM](https://github.com/deepseek-ai/DeepGEMM) 2.5.0 (MIT). The MegaMoE
+kernel + JIT launcher + heuristics are kept verbatim (editable in `src/`); shared infra is
+vendored under `../../common/vendor/`. Only additions: the TVM-FFI bridge and the
+`#ifdef`-guarded profiler probes.
 
 ## Status
 
@@ -119,23 +112,7 @@ open it at https://ui.perfetto.dev.
       (`max|ours-ref| = 0`), via `tests/test_e2e.py`
 - [x] **per-SM Perfetto profiler** — 148 SMs × begin/end spans → trace JSON
       (`MEGA_PROF=1 DG_JIT_EXTRA_FLAGS=-DMEGA_ENABLE_PROFILER`), zero-cost when off
-- [ ] Expand profiler probes to the 5 phases (dispatch/L1/swiglu/L2/combine)
-- [ ] Multi-GPU NVLink (SymmBuffer + dispatch/combine across ranks)
-
-## Running on the B200 container
-
-```bash
-# build the TVM-FFI bridge .so (g++)
-bash kernels/mega_moe/build_ffi.sh        # -> build_ffi/libmega_moe_ffi.so + jit_root/
-
-# correctness (vs deep_gemm), profiler off
-MEGA_MOE_LIB=build_ffi/libmega_moe_ffi.so MEGA_JIT_ROOT=build_ffi/jit_root \
-  python kernels/mega_moe/tests/test_e2e.py          # -> [rank 0] PASS
-
-# per-SM Perfetto trace (JIT compiles the kernel with -DMEGA_ENABLE_PROFILER)
-MEGA_PROF=1 DG_JIT_EXTRA_FLAGS=-DMEGA_ENABLE_PROFILER \
-MEGA_MOE_LIB=build_ffi/libmega_moe_ffi.so MEGA_JIT_ROOT=build_ffi/jit_root \
-  python kernels/mega_moe/tests/test_e2e.py          # -> prof.bin
-python common/tools/export_perfetto.py prof.bin -o trace.json   # open at ui.perfetto.dev
-```
-```
+- [x] **Multi-GPU NVLink** — real multi-rank EP (4/8 ranks) PASS vs deep_gemm (`diff=0`)
+- [x] **per-tile profiler** — per-role + L1/L2/Act/Combine lanes (`-DMEGA_PROFILE_BLOCKS`),
+      see [../../docs/profiling.md](../../docs/profiling.md)
+- [ ] Integrate as SonicMoE's forward (EP-training fusion — the project goal)

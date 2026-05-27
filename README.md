@@ -40,49 +40,40 @@ observable (per-SM Perfetto) while keeping the DeepGEMM kernel itself unchanged.
 
 ```
 blackwell_mega_kernel/
-├── CMakeLists.txt                  Top-level: global options + add_subdirectory(kernels/*)
-├── common/                         Shared across kernels
-│   ├── include/mega/
-│   │   └── profiler.cuh            per-SM Perfetto probe (device macros, zero-cost when off)
-│   ├── python/mega_common/
-│   │   └── __init__.py             tvm_ffi module loading + profiler buffer helpers
-│   ├── tools/
-│   │   └── export_perfetto.py      profiler buffer → Perfetto trace JSON
-│   └── vendor/deep_gemm/           Vendored DeepGEMM device headers (MIT, verbatim)
+├── docs/profiling.md               per-SM/per-tile profiling guide
+├── common/                         shared across kernels
+│   ├── include/mega/profiler.cuh   per-SM Perfetto probe (device macros, zero-cost when off)
+│   ├── python/mega_common/         tvm_ffi module loading + profiler buffer helpers
+│   ├── tools/                      export_perfetto.py / decode_prof.py (trace tooling)
+│   └── vendor/{deep_gemm,csrc}/    vendored DeepGEMM shared infra (MIT, verbatim)
 └── kernels/
-    └── mega_moe/                   See kernels/mega_moe/README.md
-        ├── CMakeLists.txt          Usable from the top level or standalone
-        ├── include/mega_moe/       Public API + shapes + workspace + events
+    └── mega_moe/                   see kernels/mega_moe/README.md
+        ├── src/                    EDITABLE MegaMoE source (deep_gemm/ device + csrc/ host)
         ├── bindings/               TVM FFI C++ binding
-        ├── python/mega_moe/        Kernel-specific config + call wrappers
-        ├── tests/                  5-phase CPU golden reference + unit tests
-        ├── src/                    CUDA kernel (in progress)
-        └── bench/                  Performance baselines (in progress)
+        ├── python/mega_moe/        kernel-specific config + call wrappers
+        ├── tests/test_e2e.py       multi-rank end-to-end test (vs deep_gemm)
+        └── build_ffi.sh            builds the .so + merged include trees
 ```
 
 ## Three design pillars
 
-1. **Clean C++/CUDA kernel**: the single monolithic kernel is split into readable
-   `phase_*` functions plus a warp-role table.
+1. **Kernel kept consistent with DeepGEMM**: the MegaMoE kernel + JIT launcher are
+   vendored/derived verbatim (no rewrite); only the bridge and `#ifdef`-guarded profiler
+   probes are added. The editable source lives in `kernels/mega_moe/src/`.
 2. **TVM FFI binding**: exposed through the `tvm::ffi` C++ interface as a stable ABI,
-   callable from Python (torch→DLPack, zero-copy). Keeps the Python/JIT workflow without
-   depending on pybind11 or the torch C++ extension.
+   callable from Python (torch→DLPack, zero-copy). Keeps the Python/JIT (NVCC) workflow.
 3. **per-SM Perfetto tracing** (modeled on the
    [FlashInfer profiler](https://github.com/flashinfer-ai/flashinfer/blob/main/include/flashinfer/profiler.cuh)):
-   gated by `-DMEGA_ENABLE_PROFILER`, zero-cost when off; exports a per-SM timeline so you
-   can see how the phases overlap (per-role) or the per-tile L1/L2/Act/Combine rhythm
-   (per-block, PR-style lanes). Full guide: [docs/profiling.md](docs/profiling.md).
+   gated by `-DMEGA_ENABLE_PROFILER`, zero-cost when off; per-role timeline or per-tile
+   L1/L2/Act/Combine lanes. Full guide: [docs/profiling.md](docs/profiling.md).
 
-## Build
+## Build & run (B200 + CUTLASS + apache-tvm-ffi)
+
+The build is driven by `build_ffi.sh` (the runtime NVCC JIT compiles the kernel; the bridge
+`.so` is host-only g++). There is no CMake build.
 
 ```bash
-# Host reference + unit tests only (no GPU/CUTLASS/tvm-ffi needed)
-cmake -B build && cmake --build build -j && ctest --test-dir build
-
-# With the CUDA kernel + tvm-ffi binding + profiler (needs B200 + CUTLASS + apache-tvm-ffi)
-cmake -B build \
-  -DMEGA_BUILD_KERNEL=ON -DMEGA_BUILD_FFI=ON -DMEGA_ENABLE_PROFILER=ON \
-  -DMEGA_CUTLASS_DIR=/path/to/cutlass/include \
-  -DMEGA_TVM_FFI_DIR=$(python -c "import tvm_ffi,os;print(os.path.dirname(tvm_ffi.__file__))")
-cmake --build build -j
+bash kernels/mega_moe/build_ffi.sh                          # -> build_ffi/libmega_moe_ffi.so + jit_root/
+MEGA_MOE_LIB=build_ffi/libmega_moe_ffi.so MEGA_JIT_ROOT=build_ffi/jit_root \
+  python kernels/mega_moe/tests/test_e2e.py                 # multi-rank, checks vs deep_gemm
 ```
