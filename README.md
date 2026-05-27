@@ -7,6 +7,27 @@ standalone, is unit-testable, and ships with **per-SM Perfetto timeline visualiz
 Each mega kernel lives in its own directory under [`kernels/`](kernels/) and shares the
 infrastructure in [`common/`](common/) (profiler probes, Perfetto export, TVM FFI loader).
 
+> **Attribution.** The kernels and host launcher in this repo are derived from
+> [DeepGEMM](https://github.com/deepseek-ai/DeepGEMM) (MIT License, Copyright (c) 2025
+> DeepSeek). DeepGEMM code is vendored verbatim under [`common/vendor/`](common/vendor)
+> (see its LICENSE/README). This repository exists for **study and further development**;
+> our own additions are the TVM-FFI binding, the per-SM Perfetto profiler, and the
+> integration work described below.
+
+## Project goal
+
+This repo is part of a **training-time Expert-Parallel (EP) optimization** built by fusing
+**SonicMoE + MegaMoE**. The MoE kernels here (MegaMoE) are intended to become the high-
+performance forward path of that fused MoE layer. Roadmap:
+
+1. **Implement SonicMoE** (the EP training MoE path) first.
+2. **Replace SonicMoE's forward with MegaMoE** — wire the fused FP8×FP4 MegaMoE kernel
+   (exposed via the TVM-FFI binding below) in as SonicMoE's forward, with the per-SM
+   Perfetto profiler for performance analysis during EP training.
+
+The current work in this repo is step toward (2): make MegaMoE callable (TVM-FFI) and
+observable (per-SM Perfetto) while keeping the DeepGEMM kernel itself unchanged.
+
 ## Contents
 
 | Kernel | Description | Status |
