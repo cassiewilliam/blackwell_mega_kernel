@@ -101,7 +101,8 @@ void MegaMoE(TensorView y,
              int64_t rank_idx,
              int64_t num_max_tokens_per_rank,
              int64_t num_experts, int64_t num_topk,
-             double activation_clamp, bool fast_math) {
+             double activation_clamp, bool fast_math,
+             TensorView profiler_buffer /* per-SM Perfetto; 0-elem = disabled */) {
     const DLDevice dev = y.device();
     c10::cuda::CUDAGuard dev_guard(dev.device_id);
     // NOTE: DeepGEMM's launcher uses torch's current CUDA stream internally
@@ -124,7 +125,8 @@ void MegaMoE(TensorView y,
         static_cast<int>(num_max_tokens_per_rank),
         static_cast<int>(num_experts), static_cast<int>(num_topk),
         std::make_tuple(1, 1, 32), "swiglu",
-        std::optional<float>(static_cast<float>(activation_clamp)), fast_math);
+        std::optional<float>(static_cast<float>(activation_clamp)), fast_math,
+        profiler_buffer.numel() > 0 ? profiler_buffer.data_ptr() : nullptr);
 }
 
 // Token alignment helper (no tensors) — 2.5.0 renamed this from get_block_m_for_mega_moe.

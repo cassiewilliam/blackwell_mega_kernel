@@ -4,6 +4,9 @@
 #include <cutlass/arch/barrier.h>
 #include <cutlass/arch/reg_reconfig.h>
 
+// [mega_moe profiler] per-SM Perfetto probes; zero-cost / no-op unless -DMEGA_ENABLE_PROFILER
+#include <mega/profiler.cuh>
+
 #include <deep_gemm/common/math.cuh>
 #include <deep_gemm/common/tma_copy.cuh>
 #include <deep_gemm/common/utils.cuh>
@@ -59,7 +62,8 @@ sm100_fp8_fp4_mega_moe_impl(void* y,
                             const __grid_constant__ cute::TmaDescriptor tensor_map_l2_acts,
                             const __grid_constant__ cute::TmaDescriptor tensor_map_l2_acts_sf,
                             const __grid_constant__ cute::TmaDescriptor tensor_map_l2_weights,
-                            const __grid_constant__ cute::TmaDescriptor tensor_map_l2_weights_sf) {
+                            const __grid_constant__ cute::TmaDescriptor tensor_map_l2_weights_sf,
+                            void* profiler_buffer /* [mega_moe profiler] (nullptr when off) */) {
 #if (defined(__CUDA_ARCH__) and (__CUDA_ARCH__ >= 1000)) or defined(__CLION_IDE__)
     using Barrier = cutlass::arch::ClusterTransactionBarrier;
     using Allocator = cute::TMEM::Allocator2Sm;
@@ -76,6 +80,11 @@ sm100_fp8_fp4_mega_moe_impl(void* y,
     const uint32_t thread_idx = threadIdx.x;
     const uint32_t warp_idx = cutlass::canonical_warp_idx_sync();
     const uint32_t lane_idx = ptx::get_lane_idx();
+
+    // [mega_moe profiler] per-SM whole-kernel span (group 0; one writer per CTA).
+    MEGA_PROFILER_INIT(reinterpret_cast<::mega::prof::Entry*>(profiler_buffer),
+                       /*group_idx=*/0u, /*num_groups=*/1u, /*write_pred=*/thread_idx == 0);
+    MEGA_PROFILE_BEGIN(0u /* whole-kernel span; see export_perfetto --events */);
 
     // Prefetch TMA descriptors at the very beginning
     if (warp_idx == 0) {
@@ -1371,6 +1380,7 @@ sm100_fp8_fp4_mega_moe_impl(void* y,
             }
         }
     }
+    MEGA_PROFILE_END(0u /* [mega_moe profiler] end whole-kernel span */);
 #else
     if (blockIdx.x == 0 and threadIdx.x == 0)
         DG_DEVICE_ASSERT(false and "This kernel only support sm_100f");

@@ -9,8 +9,13 @@ Run inside the container:
         python kernels/mega_moe/tests/test_e2e.py
 """
 import os
+import sys
 import torch
 import torch.multiprocessing as mp
+
+# common/python on path for mega_common (profiler buffer + perfetto helpers)
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "common", "python"))
+import mega_common
 
 import deep_gemm
 from deep_gemm.utils import per_token_cast_to_fp4, per_token_cast_to_fp8
@@ -72,12 +77,28 @@ def run(local_rank, num_local_ranks):
     torch.cuda.synchronize()
     ptrs = torch.as_tensor(list(bp), dtype=torch.int64, device="cuda")
     y_ours = torch.empty((NUM_TOKENS, H), dtype=torch.bfloat16, device="cuda")
+    empty_prof = torch.empty(0, dtype=torch.int64, device="cuda")  # profiler disabled
     mod.mega_moe(y_ours, tl1[0], tl1[1], tl2[0], tl2[1],
                  buffer.buffer, ptrs, rank, buffer.num_max_tokens_per_rank,
-                 E, TK, float("inf"), True)
+                 E, TK, float("inf"), True, empty_prof)
     torch.cuda.synchronize()
     print(f"[dbg] ours-alone nonzero={(y_ours != 0).any().item()} "
           f"absmax={y_ours.float().abs().max().item():.4g}")
+
+    # --- optional: per-SM Perfetto profiling run (needs JIT built with -DMEGA_ENABLE_PROFILER) ---
+    if os.environ.get("MEGA_PROF"):
+        num_sms = torch.cuda.get_device_properties(0).multi_processor_count
+        prof = mega_common.alloc_profiler_buffer(num_sms, num_groups=1, max_events=8)
+        fill(buffer, x, topk_idx, topk_weights, NUM_TOKENS)
+        torch.cuda.synchronize()
+        mod.mega_moe(y_ours, tl1[0], tl1[1], tl2[0], tl2[1],
+                     buffer.buffer, ptrs, rank, buffer.num_max_tokens_per_rank,
+                     E, TK, float("inf"), True, prof)
+        torch.cuda.synchronize()
+        nz = int((prof != 0).sum().item())
+        mega_common.dump_profiler_buffer(prof, "prof.bin")
+        print(f"[prof] nonzero entries={nz} -> prof.bin "
+              f"(python ../../common/tools/export_perfetto.py prof.bin)")
 
     # --- reference: deep_gemm's own kernel ---
     fill(buffer, x, topk_idx, topk_weights, NUM_TOKENS)

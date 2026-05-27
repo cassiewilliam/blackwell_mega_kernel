@@ -44,6 +44,9 @@ public:
         CUtensorMap tensor_map_l2_weights;
         CUtensorMap tensor_map_l2_weights_sf;
 
+        // [mega_moe profiler] per-SM Perfetto buffer (nullptr when disabled)
+        void* profiler_buffer = nullptr;
+
         // Launch configs
         LaunchArgs launch_args;
     };
@@ -103,7 +106,8 @@ static void __instantiate_kernel() {{
             args.tensor_map_l2_acts,
             args.tensor_map_l2_acts_sf,
             args.tensor_map_l2_weights,
-            args.tensor_map_l2_weights_sf
+            args.tensor_map_l2_weights_sf,
+            args.profiler_buffer   // [mega_moe profiler]
         ));
     }
 };
@@ -121,7 +125,8 @@ static void sm100_fp8_fp4_mega_moe(
     const int& num_tokens, const int& num_topk,
     const int& hidden, const int& intermediate_hidden,
     const float& activation_clamp,
-    const bool& fast_math
+    const bool& fast_math,
+    void* profiler_buffer = nullptr   // [mega_moe profiler]
 ) {
     const auto num_ranks = static_cast<int>(sym_buffer_ptrs.size());
     const auto num_experts = num_experts_per_rank * num_ranks;
@@ -207,6 +212,7 @@ static void sm100_fp8_fp4_mega_moe(
         .tensor_map_l2_acts_sf = tensor_map_l2_acts_sf,
         .tensor_map_l2_weights = tensor_map_l2_weights,
         .tensor_map_l2_weights_sf = tensor_map_l2_weights_sf,
+        .profiler_buffer = profiler_buffer,   // [mega_moe profiler]
         .launch_args = LaunchArgs(num_sms,
                                   config.num_dispatch_threads + config.num_non_epilogue_threads + config.num_epilogue_threads,
                                   config.smem_size, 2)
