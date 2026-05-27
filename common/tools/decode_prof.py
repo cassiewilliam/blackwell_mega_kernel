@@ -11,7 +11,8 @@ import statistics as st
 import struct
 import sys
 
-NAMES = {0: "Dispatch", 1: "TMA-A", 2: "TMA-B", 3: "MMA", 4: "Epilogue", 5: "L1", 6: "L2"}
+NAMES = {0: "Dispatch", 1: "TMA-A", 2: "TMA-B", 3: "MMA", 4: "Epilogue",
+         5: "L1", 6: "L2", 7: "Act", 8: "Combine"}
 W = 2 ** 32
 
 
@@ -46,7 +47,7 @@ def main(path):
     for e in sorted(byname):
         ds = sorted(byname[e])
         bpsm = sorted(persm[e].values())
-        print(f"  {NAMES.get(e, e):9s} n={len(ds):5d}  dur_med={int(st.median(ds)):8d} ns  "
+        print(f"  {str(NAMES.get(e, e)):9s} n={len(ds):5d}  dur_med={int(st.median(ds)):8d} cyc  "
               f"[{ds[0]:8d}..{ds[-1]:8d}]  blocks/SM med={int(st.median(bpsm)) if (bpsm:=bpsm) else 0}")
 
 
