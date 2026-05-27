@@ -70,7 +70,8 @@ blackwell_mega_kernel/
 3. **per-SM Perfetto tracing** (modeled on the
    [FlashInfer profiler](https://github.com/flashinfer-ai/flashinfer/blob/main/include/flashinfer/profiler.cuh)):
    gated by `-DMEGA_ENABLE_PROFILER`, zero-cost when off; exports a per-SM timeline so you
-   can see how the phases overlap.
+   can see how the phases overlap (per-role) or the per-tile L1/L2/Act/Combine rhythm
+   (per-block, PR-style lanes). Full guide: [docs/profiling.md](docs/profiling.md).
 
 ## Build
 

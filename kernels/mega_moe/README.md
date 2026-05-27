@@ -43,44 +43,49 @@ See [include/mega_moe/shapes.h](include/mega_moe/shapes.h).
 
 ## Layout
 
+The MegaMoE-specific source (derived from DeepGEMM, **editable — modify here**) lives in
+`src/`; shared DeepGEMM infrastructure stays vendored in `../../common/vendor/`.
+
 ```
 kernels/mega_moe/
-├── include/mega_moe/
-│   ├── mega_moe.h          Public API: launch_mega_moe(...)
-│   ├── shapes.h            Compile-time config / Qwen3.5 traits
-│   ├── workspace.h         Host-side workspace / symmetric-buffer sizing
-│   ├── events.h            Perfetto event ids + warp-role definitions (pairs with ../../common/include/mega/profiler.cuh)
-│   └── detail/             Implementation details (to be vendored, see below)
-│       ├── layout.cuh          ← DeepGEMM layout/mega_moe.cuh
-│       ├── scheduler.cuh       ← DeepGEMM scheduler/mega_moe.cuh
-│       ├── barrier.cuh         ← DeepGEMM comm/barrier.cuh
-│       ├── tma_desc.cuh        TMA descriptor wrappers
-│       ├── mma_sm100_fp8fp4.cuh FP8×FP4 UMMA thin wrappers
-│       ├── tcgen05_ptx.cuh     tmem alloc/load/store
-│       ├── nvlink_pull.cuh     dispatch communication primitives
-│       ├── nvlink_push.cuh     combine communication primitives
-│       ├── swiglu_fp4_cast.cuh L1 epilogue + online amax + FP8 cast
-│       └── grouped_gemm.cuh    Linear1/Linear2 shared GEMM main loop
-├── src/
-│   ├── mega_moe_sm100.cu       Main kernel (five phases split into phase_* __device__ functions)
-│   ├── mega_moe_launch.cu      Host: TMA descriptor setup + kernel launch
-│   └── weight_transform.cu     L1 interleave + SF transpose-for-UTCCP
-├── bindings/mega_moe_ffi.cu    TVM FFI C++ binding (TensorView + export macro)
-├── python/mega_moe/__init__.py Kernel-specific config (reuses mega_common.load)
-├── tests/                      reference_cpu.{h,cc} + test_layout.cu
-└── bench/                      bench_mega_moe.cu
+├── src/                              EDITABLE MegaMoE source (kept consistent w/ DeepGEMM)
+│   ├── deep_gemm/                      device code
+│   │   ├── impls/sm100_fp8_fp4_mega_moe.cuh   the kernel (+ #ifdef-guarded profiler probes)
+│   │   ├── layout/mega_moe.cuh                workspace / sym-buffer layout
+│   │   └── scheduler/mega_moe.cuh             wave scheduler
+│   └── csrc/                           host code
+│       ├── apis/mega.hpp                       top-level API (fp8_fp4_mega_moe)
+│       ├── jit_kernels/impls/sm100_fp8_fp4_mega_moe.hpp   NVCC-JIT launcher
+│       └── jit_kernels/heuristics/mega_moe.hpp  config heuristics (block_m, stages, …) — tune here
+├── bindings/mega_moe_ffi.cu          TVM FFI bridge (DLPack TensorView → torch → launcher)
+├── python/mega_moe/__init__.py       kernel-specific config (reuses mega_common.load)
+├── include/mega_moe/                 host-side CPU-reference helpers (shapes/workspace/events)
+├── tests/                            reference_cpu.{h,cc}, test_layout.cu, test_e2e.py
+├── bench/                            (perf via DeepGEMM's tests/test_mega_moe.py — see docs)
+└── build_ffi.sh                      builds the .so + merged include trees (jit_root/host_root)
 ```
 
-## Build (standalone)
+> Shared (don't modify): `common/vendor/deep_gemm/{comm,common,mma,ptx,layout/sym_buffer}` +
+> `common/vendor/csrc/{jit,utils,jit_kernels/...}`. `build_ffi.sh` builds **merged include
+> trees** so `<deep_gemm/...>` and `csrc/...` resolve the MegaMoE files to `src/` and
+> everything else to `common/vendor/`.
+
+## Build / run
 
 ```bash
-# Host reference + unit tests only
+# host-only CPU reference + unit test (no GPU)
 cmake -S kernels/mega_moe -B build && cmake --build build -j && ctest --test-dir build
-# Or build everything from the repo root (recommended): see ../../README.md
+
+# CUDA: build the TVM-FFI .so (B200 container), then end-to-end test
+bash kernels/mega_moe/build_ffi.sh
+MEGA_MOE_LIB=build_ffi/libmega_moe_ffi.so MEGA_JIT_ROOT=build_ffi/jit_root \
+  python kernels/mega_moe/tests/test_e2e.py        # multi-rank; checks vs deep_gemm
+
+# edit the kernel → rebuild → JIT picks up your src/ version
+$EDITOR src/deep_gemm/impls/sm100_fp8_fp4_mega_moe.cuh && bash kernels/mega_moe/build_ffi.sh
 ```
 
-CUDA / FFI / profiler toggles reuse the top-level global options: `MEGA_BUILD_KERNEL` /
-`MEGA_BUILD_FFI` / `MEGA_ENABLE_PROFILER` / `MEGA_CUTLASS_DIR` / `MEGA_TVM_FFI_DIR`.
+Profiling: see [../../docs/profiling.md](../../docs/profiling.md).
 
 ## TVM FFI binding at a glance
 [bindings/mega_moe_ffi.cu](bindings/mega_moe_ffi.cu): arguments are `tvm::ffi::TensorView`
