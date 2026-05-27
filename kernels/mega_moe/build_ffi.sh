@@ -1,0 +1,43 @@
+#!/bin/bash
+# build_ffi.sh — compile the TVM-FFI bridge .so inside the B200 container.
+# Run from the repo root. Discovers torch / tvm_ffi / CUDA paths at build time.
+set -e
+
+REPO="$(cd "$(dirname "$0")/../.." && pwd)"
+echo "repo=$REPO"
+
+# --- discover toolchain paths (container: lmdeploy-fix-build) ---
+TORCH=$(python3 -c "import torch,os;print(os.path.dirname(torch.__file__))")
+TVM_FFI=$(python3 -c "import tvm_ffi,os;print(os.path.dirname(tvm_ffi.__file__))")
+ABI=$(python3 -c "import torch;print(int(torch.compiled_with_cxx11_abi()))")
+CUDA=${CUDA_HOME:-/usr/local/cuda}
+CUTLASS=${MEGA_CUTLASS_DIR:-/home/workcode/lmdeploy-trtllm-fused-moe/build/_deps/repo-cutlass-src/include}
+NVLIB=$(python3 -c "import os,glob;print(os.path.dirname(glob.glob('/opt/py3/**/nvidia/cu13/lib/libnvrtc.so*',recursive=True)[0]))")
+TVM_FFI_LIB=$(python3 -c "import os,glob;c=glob.glob('$TVM_FFI/**/libtvm_ffi*.so*',recursive=True);print(os.path.dirname(c[0]) if c else '')")
+
+echo "torch=$TORCH abi=$ABI"
+echo "tvm_ffi=$TVM_FFI lib=$TVM_FFI_LIB"
+echo "cuda=$CUDA cutlass=$CUTLASS nvlib=$NVLIB"
+
+OUT="$REPO/build_ffi"
+mkdir -p "$OUT"
+
+nvcc -std=c++20 -O3 -arch=sm_100a --expt-relaxed-constexpr \
+  -shared -Xcompiler -fPIC \
+  -D_GLIBCXX_USE_CXX11_ABI=$ABI -DDG_TENSORMAP_COMPATIBLE=1 \
+  -I"$REPO/common/vendor" \
+  -I"$REPO/common/include" \
+  -I"$CUTLASS" \
+  -I"$TVM_FFI/include" \
+  -I"$TORCH/include" \
+  -I"$TORCH/include/torch/csrc/api/include" \
+  -I"$CUDA/include" \
+  "$REPO/kernels/mega_moe/bindings/mega_moe_ffi.cu" \
+  -L"$TORCH/lib" -ltorch -ltorch_cpu -ltorch_cuda -lc10 -lc10_cuda \
+  -L"$NVLIB" -lnvrtc -lcublasLt \
+  ${TVM_FFI_LIB:+-L"$TVM_FFI_LIB" -ltvm_ffi} \
+  -L"$CUDA/lib64" -lcudart -lcuda \
+  -o "$OUT/libmega_moe_ffi.so"
+
+echo "BUILD_OK: $OUT/libmega_moe_ffi.so"
+ls -la "$OUT/libmega_moe_ffi.so"
