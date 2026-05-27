@@ -88,12 +88,18 @@ def main():
                     help="comma-separated event names (by event_idx); default = mega_moe table")
     ap.add_argument("--max-sms", type=int, default=0,
                     help="keep only the first N SM ids (smaller file; SMs run in lockstep)")
+    ap.add_argument("--roles", default=None,
+                    help="comma-separated event_idx to keep, e.g. '5,6' for L1/L2 only "
+                         "(drops coarse role spans so the view scales to the compute tiles)")
     args = ap.parse_args()
 
     event_names = args.events.split(",") if args.events else DEFAULT_EVENT_NAMES
     with open(args.buffer, "rb") as f:
         raw = f.read()
     nb, ng, events = decode(raw)
+    if args.roles:
+        keep_e = {int(x) for x in args.roles.split(",")}
+        events = [e for e in events if e["eidx"] in keep_e]
     if args.max_sms:
         keep = sorted({e["sm"] for e in events})[:args.max_sms]
         events = [e for e in events if e["sm"] in keep]
