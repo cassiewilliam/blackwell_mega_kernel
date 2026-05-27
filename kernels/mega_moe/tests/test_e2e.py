@@ -60,24 +60,29 @@ def run(local_rank, num_local_ranks):
     l2 = cast_grouped_weights_to_fp4(l2w)
     tl1, tl2 = deep_gemm.transform_weights_for_mega_moe(l1, l2)
 
-    # --- reference: deep_gemm's own kernel ---
-    fill(buffer, x, topk_idx, topk_weights, NUM_TOKENS)
-    y_ref = torch.empty((NUM_TOKENS, H), dtype=torch.bfloat16, device="cuda")
-    deep_gemm.fp8_fp4_mega_moe(y_ref, tl1, tl2, buffer, activation_clamp=None, fast_math=True)
-    torch.cuda.synchronize()
+    bp = buffer.handle.buffer_ptrs
+    print(f"[dbg] buffer_ptrs type={type(bp)} val={bp}")
 
-    # --- ours: via TVM-FFI bridge ---
+    # --- ours FIRST, on a clean filled buffer (isolate from reference) ---
     mod = tvm_ffi.load_module(os.path.abspath(os.environ["MEGA_MOE_LIB"]))
     # JIT cd's into a tmp dir before nvcc, so library_root must be ABSOLUTE.
     mod.init(os.path.abspath(os.environ["MEGA_JIT_ROOT"]),
              os.environ.get("CUDA_HOME", "/usr/local/cuda"))
-    fill(buffer, x, topk_idx, topk_weights, NUM_TOKENS)   # refill (debug mode may zero)
-    torch.cuda.synchronize()   # ensure fill lands before kernel (bridge may use a different stream)
-    ptrs = torch.as_tensor(list(buffer.handle.buffer_ptrs), dtype=torch.int64, device="cuda")
+    fill(buffer, x, topk_idx, topk_weights, NUM_TOKENS)
+    torch.cuda.synchronize()
+    ptrs = torch.as_tensor(list(bp), dtype=torch.int64, device="cuda")
     y_ours = torch.empty((NUM_TOKENS, H), dtype=torch.bfloat16, device="cuda")
     mod.mega_moe(y_ours, tl1[0], tl1[1], tl2[0], tl2[1],
                  buffer.buffer, ptrs, rank, buffer.num_max_tokens_per_rank,
                  E, TK, float("inf"), True)
+    torch.cuda.synchronize()
+    print(f"[dbg] ours-alone nonzero={(y_ours != 0).any().item()} "
+          f"absmax={y_ours.float().abs().max().item():.4g}")
+
+    # --- reference: deep_gemm's own kernel ---
+    fill(buffer, x, topk_idx, topk_weights, NUM_TOKENS)
+    y_ref = torch.empty((NUM_TOKENS, H), dtype=torch.bfloat16, device="cuda")
+    deep_gemm.fp8_fp4_mega_moe(y_ref, tl1, tl2, buffer, activation_clamp=None, fast_math=True)
     torch.cuda.synchronize()
 
     # --- compare ---
