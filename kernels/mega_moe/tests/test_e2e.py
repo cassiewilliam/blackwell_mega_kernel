@@ -67,8 +67,10 @@ def run(local_rank, num_local_ranks):
     torch.cuda.synchronize()
 
     # --- ours: via TVM-FFI bridge ---
-    mod = tvm_ffi.load_module(os.environ["MEGA_MOE_LIB"])
-    mod.init(os.environ["MEGA_JIT_ROOT"], os.environ.get("CUDA_HOME", "/usr/local/cuda"))
+    mod = tvm_ffi.load_module(os.path.abspath(os.environ["MEGA_MOE_LIB"]))
+    # JIT cd's into a tmp dir before nvcc, so library_root must be ABSOLUTE.
+    mod.init(os.path.abspath(os.environ["MEGA_JIT_ROOT"]),
+             os.environ.get("CUDA_HOME", "/usr/local/cuda"))
     fill(buffer, x, topk_idx, topk_weights, NUM_TOKENS)   # refill (debug mode may zero)
     ptrs = torch.as_tensor(list(buffer.handle.buffer_ptrs), dtype=torch.int64, device="cuda")
     y_ours = torch.empty((NUM_TOKENS, H), dtype=torch.bfloat16, device="cuda")
