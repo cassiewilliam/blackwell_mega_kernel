@@ -118,6 +118,7 @@ void MegaMoE(TensorView y,
         to_torch(y),
         std::make_tuple(to_torch(l1_w), to_torch(l1_sf)),
         std::make_tuple(to_torch(l2_w), to_torch(l2_sf)),
+        std::optional<torch::Tensor>(std::nullopt),  // cumulative_local_expert_recv_stats
         to_torch(sym_buffer),
         ptrs, static_cast<int>(rank_idx),
         static_cast<int>(num_max_tokens_per_rank),
@@ -126,16 +127,13 @@ void MegaMoE(TensorView y,
         std::optional<float>(static_cast<float>(activation_clamp)), fast_math);
 }
 
-// Token alignment helper (no tensors) — mirrors get_block_m_for_mega_moe.
-int64_t BlockM(int64_t num_ranks, int64_t num_experts,
-               int64_t num_max_tokens_per_rank, int64_t num_topk) {
-    return deep_gemm::get_block_m_for_mega_moe(
-        static_cast<int>(num_ranks), static_cast<int>(num_experts),
-        static_cast<int>(num_max_tokens_per_rank), static_cast<int>(num_topk));
+// Token alignment helper (no tensors) — 2.5.0 renamed this from get_block_m_for_mega_moe.
+int64_t TokenAlignment() {
+    return deep_gemm::get_token_alignment_for_mega_moe();
 }
 
 }  // namespace
 
 TVM_FFI_DLL_EXPORT_TYPED_FUNC(init, Init);
 TVM_FFI_DLL_EXPORT_TYPED_FUNC(mega_moe, MegaMoE);
-TVM_FFI_DLL_EXPORT_TYPED_FUNC(block_m, BlockM);
+TVM_FFI_DLL_EXPORT_TYPED_FUNC(token_alignment, TokenAlignment);
