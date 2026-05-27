@@ -89,22 +89,25 @@ def run(local_rank, num_local_ranks):
     print(f"[dbg] ours-alone nonzero={(y_ours != 0).any().item()} "
           f"absmax={y_ours.float().abs().max().item():.4g}")
 
-    # --- optional: per-SM/per-role Perfetto profiling (rank 0 only; needs JIT -DMEGA_ENABLE_PROFILER) ---
-    if os.environ.get("MEGA_PROF") and rank == 0:
+    # --- optional: per-SM/per-role Perfetto profiling (needs JIT -DMEGA_ENABLE_PROFILER) ---
+    # MegaMoE is COLLECTIVE (dispatch pulls from / combine pushes to peer ranks), so
+    # EVERY rank must run this kernel call together. Only rank 0 captures the buffer.
+    if os.environ.get("MEGA_PROF"):
         num_sms = torch.cuda.get_device_properties(0).multi_processor_count
         # 5 warp-role groups (Dispatch/TMA-A/TMA-B/MMA/Epilogue), begin+end per (SM,role)
-        prof = mega_common.alloc_profiler_buffer(max(num_sms, 256), num_groups=5, max_events=4)
-        print(f"[prof] num_sms={num_sms} buffer_entries={prof.numel()}")
+        prof = (mega_common.alloc_profiler_buffer(max(num_sms, 256), num_groups=5, max_events=4)
+                if rank == 0 else empty_prof)
         fill(buffer, x, topk_idx, topk_weights, NUM_TOKENS)
         torch.cuda.synchronize()
+        group.barrier()                                  # all ranks enter together
         mod.mega_moe(y_ours, tl1[0], tl1[1], tl2[0], tl2[1],
                      buffer.buffer, ptrs, rank, buffer.num_max_tokens_per_rank,
-                     E, TK, float("inf"), True, prof)
+                     E, TK, float("inf"), True, prof)     # collective: ALL ranks
         torch.cuda.synchronize()
-        nz = int((prof != 0).sum().item())
-        mega_common.dump_profiler_buffer(prof, "prof.bin")
-        print(f"[prof] nonzero entries={nz} -> prof.bin "
-              f"(python ../../common/tools/export_perfetto.py prof.bin)")
+        if rank == 0:
+            nz = int((prof != 0).sum().item())
+            mega_common.dump_profiler_buffer(prof, "prof.bin")
+            print(f"[prof] num_sms={num_sms} entries={prof.numel()} nonzero={nz} -> prof.bin")
 
     # --- reference: deep_gemm's own kernel ---
     fill(buffer, x, topk_idx, topk_weights, NUM_TOKENS)
