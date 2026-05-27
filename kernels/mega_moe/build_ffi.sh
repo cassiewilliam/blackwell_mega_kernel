@@ -55,8 +55,8 @@ done
 # reason. g++ leaves CUTLASS_HOST_DEVICE as plain inline and picks DG_HOST_ASSERT.
 g++ -std=c++20 -O3 -fPIC -shared \
   -D_GLIBCXX_USE_CXX11_ABI=$ABI -DDG_TENSORMAP_COMPATIBLE=1 \
-  -I"$REPO/kernels/mega_moe/src" \
   -I"$HOSTROOT" \
+  -I"$REPO/kernels/mega_moe/src" \
   -I"$REPO/common/vendor" \
   -I"$REPO/common/include" \
   -I"$CUTLASS" \
