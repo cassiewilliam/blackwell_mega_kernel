@@ -72,16 +72,24 @@ at::ScalarType dl_to_torch(DLDataType dt) {
                              << " bits=" << int(dt.bits);
 }
 
-// Non-owning torch view over a TensorView's device memory (contiguous assumed).
+// Non-owning torch view over a TensorView's device memory. Preserves strides for
+// non-contiguous tensors (the transformed weight SF tensors are transposed views,
+// which DeepGEMM's launcher reads via stride(-2)).
 torch::Tensor to_torch(TensorView t) {
-    TVM_FFI_CHECK(t.IsContiguous(), ValueError) << "bridge expects contiguous tensors";
     const DLDevice dev = t.device();
-    std::vector<int64_t> sizes(t.ndim());
-    for (int i = 0; i < t.ndim(); ++i) sizes[i] = t.size(i);
+    const int nd = t.ndim();
+    std::vector<int64_t> sizes(nd);
+    auto sh = t.shape();
+    for (int i = 0; i < nd; ++i) sizes[i] = sh[i];
     auto opts = torch::TensorOptions()
                     .dtype(dl_to_torch(t.dtype()))
                     .device(torch::kCUDA, dev.device_id);
-    return torch::from_blob(t.data_ptr(), sizes, opts);
+    if (t.IsContiguous())
+        return torch::from_blob(t.data_ptr(), sizes, opts);
+    std::vector<int64_t> strides(nd);
+    auto st = t.strides();
+    for (int i = 0; i < nd; ++i) strides[i] = st[i];
+    return torch::from_blob(t.data_ptr(), sizes, strides, opts);
 }
 
 // Main entry — mirrors deep_gemm.fp8_fp4_mega_moe (recipe fixed to (1,1,32), swiglu).
