@@ -33,12 +33,17 @@ mkdir -p "$OUT"
 HOSTROOT="$OUT/host_root"
 rm -rf "$HOSTROOT"; mkdir -p "$HOSTROOT/csrc/"{apis,jit_kernels/impls,jit_kernels/heuristics}
 VC="$REPO/common/vendor/csrc"; SC="$REPO/kernels/mega_moe/src/csrc"
+# shared dirs/files: symlink (their own relative includes resolve within vendor).
 ln -sfn "$VC/jit"   "$HOSTROOT/csrc/jit"
 ln -sfn "$VC/utils" "$HOSTROOT/csrc/utils"
-ln -sfn "$SC/apis/mega.hpp"                                  "$HOSTROOT/csrc/apis/mega.hpp"
-ln -sfn "$SC/jit_kernels/impls/sm100_fp8_fp4_mega_moe.hpp"   "$HOSTROOT/csrc/jit_kernels/impls/sm100_fp8_fp4_mega_moe.hpp"
 ln -sfn "$VC/jit_kernels/impls/runtime_utils.hpp"            "$HOSTROOT/csrc/jit_kernels/impls/runtime_utils.hpp"
-ln -sfn "$SC/jit_kernels/heuristics/mega_moe.hpp"            "$HOSTROOT/csrc/jit_kernels/heuristics/mega_moe.hpp"
+# editable MegaMoE host files: COPY (g++ canonicalizes symlinks, so a symlinked file's
+# relative '../jit/' would resolve at the symlink TARGET dir, not here). Copy = real file
+# in this merged tree -> relative includes hit the symlinked siblings above. Re-copied
+# every build, so edits in src/csrc/ take effect; src/csrc is the source of truth.
+cp "$SC/apis/mega.hpp"                                "$HOSTROOT/csrc/apis/mega.hpp"
+cp "$SC/jit_kernels/impls/sm100_fp8_fp4_mega_moe.hpp" "$HOSTROOT/csrc/jit_kernels/impls/sm100_fp8_fp4_mega_moe.hpp"
+cp "$SC/jit_kernels/heuristics/mega_moe.hpp"          "$HOSTROOT/csrc/jit_kernels/heuristics/mega_moe.hpp"
 for h in sm100 sm90 common config runtime utils; do
   ln -sfn "$VC/jit_kernels/heuristics/$h.hpp" "$HOSTROOT/csrc/jit_kernels/heuristics/$h.hpp"
 done
