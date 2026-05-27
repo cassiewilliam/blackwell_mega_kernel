@@ -85,13 +85,18 @@ def main():
     ap.add_argument("buffer", help="profiler buffer dump (raw little-endian uint64)")
     ap.add_argument("-o", "--out", default="trace.json")
     ap.add_argument("--events", default=None,
-                    help="逗号分隔的事件名表（按 event_idx 顺序）；缺省用 mega_moe 默认表")
+                    help="comma-separated event names (by event_idx); default = mega_moe table")
+    ap.add_argument("--max-sms", type=int, default=0,
+                    help="keep only the first N SM ids (smaller file; SMs run in lockstep)")
     args = ap.parse_args()
 
     event_names = args.events.split(",") if args.events else DEFAULT_EVENT_NAMES
     with open(args.buffer, "rb") as f:
         raw = f.read()
     nb, ng, events = decode(raw)
+    if args.max_sms:
+        keep = sorted({e["sm"] for e in events})[:args.max_sms]
+        events = [e for e in events if e["sm"] in keep]
     trace = to_chrome_trace(events, event_names)
     with open(args.out, "w") as f:
         json.dump(trace, f)
