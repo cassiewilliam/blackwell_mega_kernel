@@ -104,11 +104,10 @@ void MegaMoE(TensorView y,
              double activation_clamp, bool fast_math) {
     const DLDevice dev = y.device();
     c10::cuda::CUDAGuard dev_guard(dev.device_id);
-
-    // Run on the stream tvm-ffi designates as current, by making it torch's stream.
-    auto raw = static_cast<cudaStream_t>(TVMFFIEnvGetStream(dev.device_type, dev.device_id));
-    auto stream = at::cuda::getStreamFromExternal(raw, dev.device_id);
-    at::cuda::CUDAStreamGuard stream_guard(stream);
+    // NOTE: DeepGEMM's launcher uses torch's current CUDA stream internally
+    // (at::cuda::getCurrentCUDAStream). We deliberately do NOT override it with the
+    // tvm-ffi stream here — the caller controls ordering via torch's current stream,
+    // matching how deep_gemm.fp8_fp4_mega_moe itself runs.
 
     // sym_buffer_ptrs: copy int64 tensor into a std::vector (host side)
     auto ptrs_t = to_torch(sym_buffer_ptrs).to(torch::kCPU).contiguous();
