@@ -97,6 +97,7 @@ static void __instantiate_kernel() {{
             args.y,
             args.cumulative_local_expert_recv_stats,
             args.num_tokens,
+            args.profiler_buffer,   // [mega_moe profiler] before grid_constant block
             args.sym_buffer_ptrs,
             args.tensor_map_l1_acts,
             args.tensor_map_l1_acts_sf,
@@ -106,8 +107,7 @@ static void __instantiate_kernel() {{
             args.tensor_map_l2_acts,
             args.tensor_map_l2_acts_sf,
             args.tensor_map_l2_weights,
-            args.tensor_map_l2_weights_sf,
-            args.profiler_buffer   // [mega_moe profiler]
+            args.tensor_map_l2_weights_sf
         ));
     }
 };
