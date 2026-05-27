@@ -21,6 +21,8 @@ if(NOT TARGET mega_common)
     if(MEGA_ENABLE_PROFILER)
         target_compile_definitions(mega_common INTERFACE MEGA_ENABLE_PROFILER)
     endif()
+    add_library(mega_vendor_deepgemm INTERFACE)
+    target_include_directories(mega_vendor_deepgemm INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/../../common/vendor)
     enable_testing()
 endif()
 
@@ -51,7 +53,7 @@ if(MEGA_BUILD_KERNEL)
         src/mega_moe_launch.cu
         src/weight_transform.cu)
     target_include_directories(mega_moe PUBLIC ${MM_INC} ${MEGA_CUTLASS_DIR})
-    target_link_libraries(mega_moe PUBLIC mega_common)
+    target_link_libraries(mega_moe PUBLIC mega_common mega_vendor_deepgemm)
     target_compile_options(mega_moe PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr -O3>)
 

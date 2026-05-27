@@ -26,6 +26,10 @@ if(MEGA_ENABLE_PROFILER)
     target_compile_definitions(mega_common INTERFACE MEGA_ENABLE_PROFILER)
 endif()
 
+# ----- vendored DeepGEMM 头（仅 CUDA 构建需要；保留 deep_gemm/ 命名空间）-----
+add_library(mega_vendor_deepgemm INTERFACE)
+target_include_directories(mega_vendor_deepgemm INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/common/vendor)
+
 enable_testing()
 
 # ----- 各 kernel 子工程 -----
