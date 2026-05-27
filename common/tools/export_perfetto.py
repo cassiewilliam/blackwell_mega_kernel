@@ -49,33 +49,34 @@ def decode(raw: bytes):
     return num_blocks, num_groups, events
 
 
-def to_chrome_trace(events, event_names):
-    """Chrome/Perfetto trace JSON. Track (pid) = SM, tid = block/CTA.
+PID = 0  # single process; one thread-track per SM (so all SM rows are visible at once)
 
-    Adds process_name/thread_name metadata so Perfetto shows "SM N" / "CTA N"
-    instead of "Process N" / "Thread N".
+
+def to_chrome_trace(events, event_names):
+    """Chrome/Perfetto trace JSON. ONE process, one thread per SM (tid = sm_id).
+
+    Using a thread-per-SM (instead of process-per-SM) means expanding the single
+    process shows all SM timelines at once — Perfetto collapses *processes* by
+    default, which otherwise hides every SM behind a thin summary line.
     """
     out = []
-    sms, threads = set(), set()
+    sms = set()
     for e in events:
         name = event_names[e["eidx"]] if e["eidx"] < len(event_names) else f"ev{e['eidx']}"
         ph = {TYPE_BEGIN: "B", TYPE_END: "E", TYPE_INSTANT: "i"}[e["type"]]
         rec = dict(name=name, ph=ph, ts=e["ts"] / 1000.0,  # ns -> us
-                   pid=e["sm"], tid=e["block"])
+                   pid=PID, tid=e["sm"], args={"cta": e["block"]})
         if ph == "i":
             rec["s"] = "t"
         out.append(rec)
         sms.add(e["sm"])
-        threads.add((e["sm"], e["block"]))
-    # name tracks: process = SM, thread = CTA
+    out.append(dict(name="process_name", ph="M", pid=PID,
+                    args={"name": "MegaMoE (per-SM)"}))
     for sm in sorted(sms):
-        out.append(dict(name="process_name", ph="M", pid=sm,
+        out.append(dict(name="thread_name", ph="M", pid=PID, tid=sm,
                         args={"name": f"SM {sm:03d}"}))
-        out.append(dict(name="process_sort_index", ph="M", pid=sm,
+        out.append(dict(name="thread_sort_index", ph="M", pid=PID, tid=sm,
                         args={"sort_index": sm}))
-    for sm, blk in sorted(threads):
-        out.append(dict(name="thread_name", ph="M", pid=sm, tid=blk,
-                        args={"name": f"CTA {blk}"}))
     return {"traceEvents": out, "displayTimeUnit": "ns"}
 
 
