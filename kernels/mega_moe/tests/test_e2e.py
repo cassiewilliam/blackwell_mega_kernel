@@ -23,10 +23,14 @@ from deep_gemm.utils.dist import init_dist
 
 import tvm_ffi
 
-H, I = 512, 512          # hidden, intermediate; dim/32 must be 16B-aligned (=> dim % 512 == 0)
-E, TK = 8, 2             # experts, top-k
-NUM_MAX = 128            # max tokens/rank (aligned up to block_m internally)
-NUM_TOKENS = 64
+# Real multi-rank EP run (default 8 GPUs). Shapes env-overridable.
+NPROC = int(os.environ.get("MEGA_NPROC", "8"))            # GPUs / ranks
+H = int(os.environ.get("MEGA_H", "2048"))                 # hidden  (dim/32 must be 16B-aligned)
+I = int(os.environ.get("MEGA_I", "1024"))                 # intermediate
+E = int(os.environ.get("MEGA_E", "64"))                   # total experts (must be % num_ranks == 0)
+TK = int(os.environ.get("MEGA_TK", "4"))                  # top-k
+NUM_MAX = int(os.environ.get("MEGA_NMAX", "512"))         # max tokens/rank
+NUM_TOKENS = int(os.environ.get("MEGA_NTOK", "256"))      # active tokens this rank
 
 
 def cast_grouped_weights_to_fp4(bf16_w):
@@ -85,11 +89,11 @@ def run(local_rank, num_local_ranks):
     print(f"[dbg] ours-alone nonzero={(y_ours != 0).any().item()} "
           f"absmax={y_ours.float().abs().max().item():.4g}")
 
-    # --- optional: per-SM Perfetto profiling run (needs JIT built with -DMEGA_ENABLE_PROFILER) ---
-    if os.environ.get("MEGA_PROF"):
+    # --- optional: per-SM/per-role Perfetto profiling (rank 0 only; needs JIT -DMEGA_ENABLE_PROFILER) ---
+    if os.environ.get("MEGA_PROF") and rank == 0:
         num_sms = torch.cuda.get_device_properties(0).multi_processor_count
-        # over-allocate generously to rule out OOB while bringing up the profiler
-        prof = mega_common.alloc_profiler_buffer(max(num_sms, 1024), num_groups=4, max_events=64)
+        # 5 warp-role groups (Dispatch/TMA-A/TMA-B/MMA/Epilogue), begin+end per (SM,role)
+        prof = mega_common.alloc_profiler_buffer(max(num_sms, 256), num_groups=5, max_events=4)
         print(f"[prof] num_sms={num_sms} buffer_entries={prof.numel()}")
         fill(buffer, x, topk_idx, topk_weights, NUM_TOKENS)
         torch.cuda.synchronize()
@@ -119,4 +123,7 @@ def run(local_rank, num_local_ranks):
 
 
 if __name__ == "__main__":
-    mp.spawn(run, args=(1,), nprocs=1)
+    assert E % NPROC == 0, f"E({E}) must be divisible by NPROC({NPROC})"
+    print(f"launching {NPROC} ranks: H={H} I={I} experts={E}({E//NPROC}/rank) "
+          f"topk={TK} tokens={NUM_TOKENS}/{NUM_MAX}")
+    mp.spawn(run, args=(NPROC,), nprocs=NPROC)

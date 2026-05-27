@@ -20,12 +20,9 @@ import argparse
 import json
 import struct
 
-# 默认事件名表 = mega_moe（顺序须与 kernels/mega_moe/include/mega_moe/events.h 一致）。
-# 其它 kernel 用 --events 覆盖，逗号分隔，按 event_idx 顺序排列。
-DEFAULT_EVENT_NAMES = [
-    "Dispatch", "Linear1", "SwiGLU", "Linear2", "Combine",
-    "TMA-A", "TMA-B", "MMA-issue", "Barrier",
-]
+# Default event names = mega_moe warp roles (event_idx order; see the kernel probes).
+# Override with --events, comma-separated, in event_idx order.
+DEFAULT_EVENT_NAMES = ["Dispatch", "TMA-A", "TMA-B", "MMA", "Epilogue"]
 TYPE_BEGIN, TYPE_END, TYPE_INSTANT = 0, 1, 2
 
 
@@ -49,34 +46,37 @@ def decode(raw: bytes):
     return num_blocks, num_groups, events
 
 
-PID = 0  # single process; one thread-track per SM (so all SM rows are visible at once)
+PID = 0          # single process
+ROLES_PER_SM = 8  # tid stride: one track per (SM, role); roles use event_idx 0..4
 
 
 def to_chrome_trace(events, event_names):
-    """Chrome/Perfetto trace JSON. ONE process, one thread per SM (tid = sm_id).
+    """Chrome/Perfetto trace JSON. ONE process; one thread-track per (SM, warp-role).
 
-    Using a thread-per-SM (instead of process-per-SM) means expanding the single
-    process shows all SM timelines at once — Perfetto collapses *processes* by
-    default, which otherwise hides every SM behind a thin summary line.
+    tid = sm*ROLES_PER_SM + role, so each SM's 5 role tracks (Dispatch / TMA-A /
+    TMA-B / MMA / Epilogue) are contiguous and sortable. Roles run concurrently on
+    different warps, so each gets its own track (their spans overlap in time).
     """
     out = []
-    sms = set()
+    tids = {}  # tid -> (sm, role)
     for e in events:
-        name = event_names[e["eidx"]] if e["eidx"] < len(event_names) else f"ev{e['eidx']}"
+        role = e["eidx"]
+        rname = event_names[role] if role < len(event_names) else f"role{role}"
+        tid = e["sm"] * ROLES_PER_SM + role
         ph = {TYPE_BEGIN: "B", TYPE_END: "E", TYPE_INSTANT: "i"}[e["type"]]
-        rec = dict(name=name, ph=ph, ts=e["ts"] / 1000.0,  # ns -> us
-                   pid=PID, tid=e["sm"], args={"cta": e["block"]})
+        rec = dict(name=rname, ph=ph, ts=e["ts"] / 1000.0,  # ns -> us
+                   pid=PID, tid=tid, args={"cta": e["block"], "sm": e["sm"]})
         if ph == "i":
             rec["s"] = "t"
         out.append(rec)
-        sms.add(e["sm"])
+        tids[tid] = (e["sm"], rname)
     out.append(dict(name="process_name", ph="M", pid=PID,
-                    args={"name": "MegaMoE (per-SM)"}))
-    for sm in sorted(sms):
-        out.append(dict(name="thread_name", ph="M", pid=PID, tid=sm,
-                        args={"name": f"SM {sm:03d}"}))
-        out.append(dict(name="thread_sort_index", ph="M", pid=PID, tid=sm,
-                        args={"sort_index": sm}))
+                    args={"name": "MegaMoE (per-SM, per-role)"}))
+    for tid, (sm, rname) in sorted(tids.items()):
+        out.append(dict(name="thread_name", ph="M", pid=PID, tid=tid,
+                        args={"name": f"SM{sm:03d} {rname}"}))
+        out.append(dict(name="thread_sort_index", ph="M", pid=PID, tid=tid,
+                        args={"sort_index": tid}))
     return {"traceEvents": out, "displayTimeUnit": "ns"}
 
 

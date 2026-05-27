@@ -81,9 +81,9 @@ sm100_fp8_fp4_mega_moe_impl(void* y,
     const uint32_t warp_idx = cutlass::canonical_warp_idx_sync();
     const uint32_t lane_idx = ptx::get_lane_idx();
 
-    // [mega_moe profiler] per-SM whole-kernel span (stateless probes; cursor 0=begin).
-    MEGA_PROFILER_INIT(profiler_buffer);
-    MEGA_PROFILE_BEGIN(profiler_buffer, 0u, 0u /* whole-kernel span */);
+    // [mega_moe profiler] 5 warp-role tracks: 0=Dispatch 1=TMA-A 2=TMA-B 3=MMA 4=Epilogue
+    constexpr uint32_t kProfNumGroups = 5;
+    MEGA_PROFILER_INIT(profiler_buffer, kProfNumGroups);
 
     // Prefetch TMA descriptors at the very beginning
     if (warp_idx == 0) {
@@ -367,6 +367,7 @@ sm100_fp8_fp4_mega_moe_impl(void* y,
     if (warp_idx < kNumDispatchWarps) {
         // Adjust registers
         cutlass::arch::warpgroup_reg_dealloc<kNumDispatchRegisters>();
+        MEGA_PROFILE_BEGIN(profiler_buffer, warp_idx == 0 && lane_idx == 0, 0u, kProfNumGroups, 0u);  // [prof] Dispatch
 
         // Dispatch warps
         DG_STATIC_ASSERT(kNumTopk <= 32, "Invalid number of topk");
@@ -666,9 +667,11 @@ sm100_fp8_fp4_mega_moe_impl(void* y,
             /* Before the NVLink barrier, there is a grid sync */ true,
             /* At the end of kernel does not need to sync */ false
         );
+        MEGA_PROFILE_END(profiler_buffer, warp_idx == 0 && lane_idx == 0, 0u, kProfNumGroups, 0u);  // [prof] end Dispatch
     } else if (warp_idx == kNumDispatchWarps) {
         // Adjust registers
         cutlass::arch::warpgroup_reg_dealloc<kNumNonEpilogueRegisters>();
+        MEGA_PROFILE_BEGIN(profiler_buffer, lane_idx == 0, 1u, kProfNumGroups, 1u);  // [prof] TMA-A
 
         // GEMM TMA load warp for tokens with SFA
         scheduler.for_each_block([&](const sched::BlockPhase& block_phase,
@@ -735,9 +738,11 @@ sm100_fp8_fp4_mega_moe_impl(void* y,
                 __syncwarp();
             }
         });
+        MEGA_PROFILE_END(profiler_buffer, lane_idx == 0, 1u, kProfNumGroups, 1u);  // [prof] end TMA-A
     } else if (warp_idx == kNumDispatchWarps + 1) {
         // Adjust registers
         cutlass::arch::warpgroup_reg_dealloc<kNumNonEpilogueRegisters>();
+        MEGA_PROFILE_BEGIN(profiler_buffer, lane_idx == 0, 2u, kProfNumGroups, 2u);  // [prof] TMA-B
 
         // GEMM TMA load warp for weights with SF
         scheduler.for_each_block([&](const sched::BlockPhase& block_phase,
@@ -778,9 +783,11 @@ sm100_fp8_fp4_mega_moe_impl(void* y,
                 __syncwarp();
             }
         });
+        MEGA_PROFILE_END(profiler_buffer, lane_idx == 0, 2u, kProfNumGroups, 2u);  // [prof] end TMA-B
     } else if (warp_idx == kNumDispatchWarps + 2) {
         // Adjust registers
         cutlass::arch::warpgroup_reg_dealloc<kNumNonEpilogueRegisters>();
+        MEGA_PROFILE_BEGIN(profiler_buffer, lane_idx == 0, 3u, kProfNumGroups, 3u);  // [prof] MMA
 
         // GEMM MMA issue warp (only the leader CTA will run)
         if (is_leader_cta) {
@@ -888,6 +895,7 @@ sm100_fp8_fp4_mega_moe_impl(void* y,
                 tmem_empty_barriers[(current_iter_idx - 1) % kNumEpilogueStages]->wait(accum_phase_idx);
             }
         }
+        MEGA_PROFILE_END(profiler_buffer, lane_idx == 0, 3u, kProfNumGroups, 3u);  // [prof] end MMA
     } else if (warp_idx == kNumDispatchWarps + 3) {
         // Adjust registers
         cutlass::arch::warpgroup_reg_dealloc<kNumNonEpilogueRegisters>();
@@ -895,6 +903,7 @@ sm100_fp8_fp4_mega_moe_impl(void* y,
     } else if (warp_idx >= kNumDispatchWarps + kNumMMANonEpilogueWarps) {
         // Adjust registers
         cutlass::arch::warpgroup_reg_alloc<kNumEpilogueRegisters>();
+        MEGA_PROFILE_BEGIN(profiler_buffer, warp_idx == kNumDispatchWarps + kNumMMANonEpilogueWarps && lane_idx == 0, 4u, kProfNumGroups, 4u);  // [prof] Epilogue
 
         // NOTES: tensor memory addresses are simplified, as the hardware will ignore the warp index bits,
         // i.e., no need for `tmem_ptr |= (epilogue_warp_idx * 32) << 16`.
@@ -1378,9 +1387,8 @@ sm100_fp8_fp4_mega_moe_impl(void* y,
                 __syncwarp();
             }
         }
+        MEGA_PROFILE_END(profiler_buffer, warp_idx == kNumDispatchWarps + kNumMMANonEpilogueWarps && lane_idx == 0, 4u, kProfNumGroups, 4u);  // [prof] end Epilogue
     }
-    // [mega_moe profiler] end whole-kernel span (cursor 1=end; stateless, reg_reconfig-safe)
-    MEGA_PROFILE_END(profiler_buffer, 1u, 0u);
 #else
     if (blockIdx.x == 0 and threadIdx.x == 0)
         DG_DEVICE_ASSERT(false and "This kernel only support sm_100f");

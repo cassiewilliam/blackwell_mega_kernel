@@ -61,42 +61,44 @@ __device__ __forceinline__ uint32_t encode_tag(uint32_t sm, uint32_t block,
            (event_idx << kIdxShift) | (type << kTypeShift);
 }
 
-// Stateless write: re-derives blockIdx/gridDim/smid and takes the buffer pointer
-// at EACH call. Holds NO state across calls — critical because warp-specialized
-// kernels run `reg_reconfig`/setmaxnreg, which would corrupt any cached register
-// state (buffer ptr / slot / stride) carried across the kernel body.
-//   num_groups is fixed to 1 here (single per-CTA track). Layout matches
-//   export_perfetto.py: slot = 1 + block + cursor * num_blocks.
-__device__ __forceinline__ void write_event(void* buf, uint32_t cursor,
+// Stateless, group-aware write: re-derives blockIdx/gridDim/smid and takes the
+// buffer pointer at EACH call. Holds NO state across calls — critical because
+// warp-specialized kernels run `reg_reconfig`/setmaxnreg, which would corrupt any
+// cached register state carried across the kernel body.
+//   `group` = warp-role track [0, num_groups). Each (block, group) gets its own
+//   begin/end slots. `active` selects the single writer thread (a role's leader).
+//   Layout: slot = 1 + (block*num_groups + group) + cursor * (num_blocks*num_groups).
+//   event_idx is stored in the tag (we set event_idx = group = role).
+__device__ __forceinline__ void write_event(void* buf, bool active, uint32_t group,
+                                             uint32_t num_groups, uint32_t cursor,
                                              uint32_t event_idx, uint32_t type) {
-    if (buf == nullptr || threadIdx.x != 0) return;
+    if (buf == nullptr || !active) return;
     const uint32_t blk = blockIdx.x, nbk = gridDim.x;
     Entry e;
     e.tag = encode_tag(read_smid(), blk, event_idx, type);
     e.delta_time = read_globaltimer_lo();
-    reinterpret_cast<Entry*>(buf)[1 + blk + (size_t)cursor * nbk] = e;
+    const uint32_t slot = 1 + (blk * num_groups + group);
+    reinterpret_cast<Entry*>(buf)[slot + (size_t)cursor * (nbk * num_groups)] = e;
 }
 
-__device__ __forceinline__ void write_header(void* buf) {
+__device__ __forceinline__ void write_header(void* buf, uint32_t num_groups) {
     if (buf == nullptr || blockIdx.x != 0 || threadIdx.x != 0) return;
-    Entry h; h.num_blocks = gridDim.x; h.num_groups = 1;
+    Entry h; h.num_blocks = gridDim.x; h.num_groups = num_groups;
     reinterpret_cast<Entry*>(buf)[0] = h;
 }
 
 }  // namespace mega::prof
 
-// All macros take the buffer pointer directly (no cached closure). `cursor` is a
-// compile-time slot index per call site (0 = begin, 1 = end, ...).
-#define MEGA_PROFILER_INIT(p_buf)             ::mega::prof::write_header(p_buf)
-#define MEGA_PROFILE_BEGIN(p_buf, cursor, ev) ::mega::prof::write_event((p_buf), (cursor), (uint32_t)(ev), ::mega::prof::kBegin)
-#define MEGA_PROFILE_END(p_buf, cursor, ev)   ::mega::prof::write_event((p_buf), (cursor), (uint32_t)(ev), ::mega::prof::kEnd)
-#define MEGA_PROFILE_INSTANT(p_buf, cursor, ev) ::mega::prof::write_event((p_buf), (cursor), (uint32_t)(ev), ::mega::prof::kInstant)
+// Group-aware macros. `act` = is-this-thread-the-role-leader; `g` = group/role;
+// `ng` = num_groups; `ev` = event id (we pass ev == g so the role is in the tag).
+#define MEGA_PROFILER_INIT(p_buf, ng)             ::mega::prof::write_header((p_buf), (ng))
+#define MEGA_PROFILE_BEGIN(p_buf, act, g, ng, ev) ::mega::prof::write_event((p_buf), (act), (g), (ng), 0u, (uint32_t)(ev), ::mega::prof::kBegin)
+#define MEGA_PROFILE_END(p_buf, act, g, ng, ev)   ::mega::prof::write_event((p_buf), (act), (g), (ng), 1u, (uint32_t)(ev), ::mega::prof::kEnd)
 
-#else  // ---------------- 关闭：全部展开为空，零开销 ----------------
+#else  // ---------------- off: expand to nothing, zero cost ----------------
 
-#define MEGA_PROFILER_INIT(p_buf)               ((void)0)
-#define MEGA_PROFILE_BEGIN(p_buf, cursor, ev)   ((void)0)
-#define MEGA_PROFILE_END(p_buf, cursor, ev)     ((void)0)
-#define MEGA_PROFILE_INSTANT(p_buf, cursor, ev) ((void)0)
+#define MEGA_PROFILER_INIT(p_buf, ng)             ((void)0)
+#define MEGA_PROFILE_BEGIN(p_buf, act, g, ng, ev) ((void)0)
+#define MEGA_PROFILE_END(p_buf, act, g, ng, ev)   ((void)0)
 
 #endif  // MEGA_ENABLE_PROFILER
