@@ -72,6 +72,7 @@ def run(local_rank, num_local_ranks):
     mod.init(os.path.abspath(os.environ["MEGA_JIT_ROOT"]),
              os.environ.get("CUDA_HOME", "/usr/local/cuda"))
     fill(buffer, x, topk_idx, topk_weights, NUM_TOKENS)   # refill (debug mode may zero)
+    torch.cuda.synchronize()   # ensure fill lands before kernel (bridge may use a different stream)
     ptrs = torch.as_tensor(list(buffer.handle.buffer_ptrs), dtype=torch.int64, device="cuda")
     y_ours = torch.empty((NUM_TOKENS, H), dtype=torch.bfloat16, device="cuda")
     mod.mega_moe(y_ours, tl1[0], tl1[1], tl2[0], tl2[1],
