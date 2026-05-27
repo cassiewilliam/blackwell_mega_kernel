@@ -94,11 +94,16 @@ __device__ __forceinline__ void write_header(void* buf, uint32_t num_groups) {
 #define MEGA_PROFILER_INIT(p_buf, ng)             ::mega::prof::write_header((p_buf), (ng))
 #define MEGA_PROFILE_BEGIN(p_buf, act, g, ng, ev) ::mega::prof::write_event((p_buf), (act), (g), (ng), 0u, (uint32_t)(ev), ::mega::prof::kBegin)
 #define MEGA_PROFILE_END(p_buf, act, g, ng, ev)   ::mega::prof::write_event((p_buf), (act), (g), (ng), 1u, (uint32_t)(ev), ::mega::prof::kEnd)
+// explicit cursor (for per-iteration probes inside loops; begin=2*iter, end=2*iter+1)
+#define MEGA_PROFILE_BEGIN_AT(p_buf, act, g, ng, cur, ev) ::mega::prof::write_event((p_buf), (act), (g), (ng), (cur), (uint32_t)(ev), ::mega::prof::kBegin)
+#define MEGA_PROFILE_END_AT(p_buf, act, g, ng, cur, ev)   ::mega::prof::write_event((p_buf), (act), (g), (ng), (cur), (uint32_t)(ev), ::mega::prof::kEnd)
 
 #else  // ---------------- off: expand to nothing, zero cost ----------------
 
 #define MEGA_PROFILER_INIT(p_buf, ng)             ((void)0)
 #define MEGA_PROFILE_BEGIN(p_buf, act, g, ng, ev) ((void)0)
 #define MEGA_PROFILE_END(p_buf, act, g, ng, ev)   ((void)0)
+#define MEGA_PROFILE_BEGIN_AT(p_buf, act, g, ng, cur, ev) ((void)0)
+#define MEGA_PROFILE_END_AT(p_buf, act, g, ng, cur, ev)   ((void)0)
 
 #endif  // MEGA_ENABLE_PROFILER

@@ -95,7 +95,8 @@ def run(local_rank, num_local_ranks):
     if os.environ.get("MEGA_PROF"):
         num_sms = torch.cuda.get_device_properties(0).multi_processor_count
         # 5 warp-role groups (Dispatch/TMA-A/TMA-B/MMA/Epilogue), begin+end per (SM,role)
-        prof = (mega_common.alloc_profiler_buffer(max(num_sms, 256), num_groups=5, max_events=4)
+        # max_events covers per-block MMA slices (cursor up to 2*num_blocks+1) + role spans
+        prof = (mega_common.alloc_profiler_buffer(max(num_sms, 256), num_groups=5, max_events=128)
                 if rank == 0 else empty_prof)
         fill(buffer, x, topk_idx, topk_weights, NUM_TOKENS)
         torch.cuda.synchronize()
