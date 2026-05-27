@@ -32,6 +32,7 @@ mkdir -p "$OUT"
 # reason. g++ leaves CUTLASS_HOST_DEVICE as plain inline and picks DG_HOST_ASSERT.
 g++ -std=c++20 -O3 -fPIC -shared \
   -D_GLIBCXX_USE_CXX11_ABI=$ABI -DDG_TENSORMAP_COMPATIBLE=1 \
+  -I"$REPO/kernels/mega_moe/src" \
   -I"$REPO/common/vendor" \
   -I"$REPO/common/include" \
   -I"$CUTLASS" \
@@ -57,10 +58,18 @@ ls -la "$OUT/libmega_moe_ffi.so"
 # which must contain deep_gemm/ + cute/ + cutlass/ (+ mega/ for profiler probes).
 # Build a symlink farm and print the path; Python passes it to init().
 JITROOT="$OUT/jit_root"
-mkdir -p "$JITROOT/include"
-ln -sfn "$REPO/common/vendor/deep_gemm" "$JITROOT/include/deep_gemm"
-ln -sfn "$REPO/common/include/mega"      "$JITROOT/include/mega"
-ln -sfn "$CUTLASS/cute"                  "$JITROOT/include/cute"
-ln -sfn "$CUTLASS/cutlass"               "$JITROOT/include/cutlass"
-echo "JIT_ROOT=$JITROOT  (pass to mega_moe init())"
-ls -l "$JITROOT/include"
+rm -rf "$JITROOT/include/deep_gemm"
+mkdir -p "$JITROOT/include/deep_gemm/"{layout,scheduler,impls}
+# deep_gemm/ is MERGED: shared infra -> common/vendor; the 3 MegaMoE files (kernel,
+# layout, scheduler) -> the EDITABLE source in kernels/mega_moe/src. Edit those.
+VDG="$REPO/common/vendor/deep_gemm"
+SDG="$REPO/kernels/mega_moe/src/deep_gemm"
+for d in comm common mma ptx; do ln -sfn "$VDG/$d" "$JITROOT/include/deep_gemm/$d"; done
+ln -sfn "$VDG/layout/sym_buffer.cuh"                       "$JITROOT/include/deep_gemm/layout/sym_buffer.cuh"
+ln -sfn "$SDG/layout/mega_moe.cuh"                         "$JITROOT/include/deep_gemm/layout/mega_moe.cuh"
+ln -sfn "$SDG/scheduler/mega_moe.cuh"                      "$JITROOT/include/deep_gemm/scheduler/mega_moe.cuh"
+ln -sfn "$SDG/impls/sm100_fp8_fp4_mega_moe.cuh"            "$JITROOT/include/deep_gemm/impls/sm100_fp8_fp4_mega_moe.cuh"
+ln -sfn "$REPO/common/include/mega" "$JITROOT/include/mega"
+ln -sfn "$CUTLASS/cute"             "$JITROOT/include/cute"
+ln -sfn "$CUTLASS/cutlass"          "$JITROOT/include/cutlass"
+echo "JIT_ROOT=$JITROOT  (deep_gemm merged: mega files -> src/, shared -> vendor/)"
