@@ -26,6 +26,21 @@ include path at build time.
 | `scheduler/mega_moe.cuh` | wave-based expert scheduling |
 | `impls/sm100_fp8_fp4_mega_moe.cuh` | the main kernel (device template, to be split/refactored) |
 
-> To upgrade: re-`cp` these 17 files from the corresponding DeepGEMM commit; do not hand-edit
-> logic in this directory. This project's changes (phase split / profiler anchors) live in
-> `kernels/mega_moe/src/` so they never pollute the vendored tree.
+## csrc/
+
+The DeepGEMM **host-side JIT + launcher slice** (24 files / ~3.3k LOC), also verbatim and
+MIT. This is the transitive include closure of `csrc/apis/mega.hpp`: the NVCC-based JIT
+runtime (`jit/`), the MoE heuristics + launcher + TMA-descriptor builders
+(`jit_kernels/`), and shared `utils/`. The `csrc/` subtree is preserved so the internal
+relative includes (`"../jit/…"`) resolve; `<deep_gemm/…>` resolves via `common/vendor` on
+the include path.
+
+We keep the JIT path (kernel is NVCC-compiled at runtime) and the torch-based launcher
+**unchanged**. The only new host code is a thin TVM-FFI bridge that converts DLPack
+`TensorView` → `torch::Tensor` (`torch::from_blob`) and calls
+`deep_gemm::mega::{get_block_m_for_mega_moe, get_symm_buffer_size_for_mega_moe,
+fp8_fp4_mega_moe}` — replacing the 28-line pybind11 `python_api.cpp`.
+
+> To upgrade: re-`cp` the vendored files from the corresponding DeepGEMM commit; do not
+> hand-edit logic here. This project's only kernel change is `#ifdef MEGA_ENABLE_PROFILER`
+> guarded profiler probes (zero-cost when off, so the kernel stays byte-identical upstream).
