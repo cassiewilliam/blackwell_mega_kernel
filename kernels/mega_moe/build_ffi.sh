@@ -51,3 +51,16 @@ g++ -std=c++20 -O3 -fPIC -shared \
 
 echo "BUILD_OK: $OUT/libmega_moe_ffi.so"
 ls -la "$OUT/libmega_moe_ffi.so"
+
+# --- JIT include root ---------------------------------------------------------
+# DeepGEMM's NVCC JIT compiles the kernel with a single -I{library_root}/include,
+# which must contain deep_gemm/ + cute/ + cutlass/ (+ mega/ for profiler probes).
+# Build a symlink farm and print the path; Python passes it to init().
+JITROOT="$OUT/jit_root"
+mkdir -p "$JITROOT/include"
+ln -sfn "$REPO/common/vendor/deep_gemm" "$JITROOT/include/deep_gemm"
+ln -sfn "$REPO/common/include/mega"      "$JITROOT/include/mega"
+ln -sfn "$CUTLASS/cute"                  "$JITROOT/include/cute"
+ln -sfn "$CUTLASS/cutlass"               "$JITROOT/include/cutlass"
+echo "JIT_ROOT=$JITROOT  (pass to mega_moe init())"
+ls -l "$JITROOT/include"

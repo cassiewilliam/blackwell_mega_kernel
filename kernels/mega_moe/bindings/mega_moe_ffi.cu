@@ -37,6 +37,16 @@ using ffi::TensorView;
 
 namespace {
 
+// One-time JIT setup — mirrors DeepGEMM's csrc/apis/runtime.hpp::init. Must be called
+// before the first mega_moe(): tells the NVCC JIT where the headers (library_root/include
+// must contain deep_gemm/ + cute/ + cutlass/ [+ mega/]) and CUDA toolkit live.
+void Init(ffi::String library_root, ffi::String cuda_home) {
+    const std::string root(library_root), cuda(cuda_home);
+    deep_gemm::Compiler::prepare_init(root, cuda);
+    deep_gemm::KernelRuntime::prepare_init(cuda);
+    deep_gemm::IncludeParser::prepare_init(root);
+}
+
 // DLPack dtype -> torch scalar type (only the dtypes that cross this bridge).
 at::ScalarType dl_to_torch(DLDataType dt) {
     if (dt.lanes != 1) TVM_FFI_THROW(TypeError) << "vector dtypes unsupported";
@@ -119,5 +129,6 @@ int64_t BlockM(int64_t num_ranks, int64_t num_experts,
 
 }  // namespace
 
+TVM_FFI_DLL_EXPORT_TYPED_FUNC(init, Init);
 TVM_FFI_DLL_EXPORT_TYPED_FUNC(mega_moe, MegaMoE);
 TVM_FFI_DLL_EXPORT_TYPED_FUNC(block_m, BlockM);
